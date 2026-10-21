@@ -1,5 +1,6 @@
 services:
   db:
+    restart: unless-stopped
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: vulnnotify
@@ -14,10 +15,12 @@ services:
 
   # Catches all outgoing email for local testing. Web UI: http://localhost:8025
   mailpit:
+    restart: unless-stopped
     image: axllent/mailpit:v1.21
     ports: ["8025:8025", "1025:1025"]
 
   app:
+    restart: unless-stopped
     build: .
     depends_on:
       db: { condition: service_healthy }
