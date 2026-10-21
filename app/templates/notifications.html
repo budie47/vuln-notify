@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Notification log · Vuln Notify{% endblock %}
+{% block content %}
+<h1 class="h3 mb-3">Notification log</h1>
+<div class="card"><div class="card-body p-0">
+<div class="table-responsive">
+<table class="table table-sm mb-0">
+  <thead class="table-light"><tr><th>When (UTC)</th><th>App ID</th><th>Status</th><th class="text-end">Vulns</th><th>Recipients</th><th>Error</th></tr></thead>
+  <tbody>
+  {% for l in logs %}
+    <tr><td class="text-nowrap">{{ l.sent_at|fmt_dt }}</td>
+      <td><a href="{{ url_for('app_detail', app_id=l.app_id) }}">{{ l.app_id }}</a></td>
+      <td><span class="badge text-bg-{{ 'success' if l.status == 'sent' else 'danger' }}">{{ l.status }}</span></td>
+      <td class="text-end num">{{ l.vuln_count }}</td><td class="small">{{ l.recipients }}</td>
+      <td class="small text-danger">{{ l.error or '' }}</td></tr>
+  {% else %}<tr><td colspan="6" class="text-center text-muted py-4">No notifications sent yet.</td></tr>{% endfor %}
+  </tbody>
+</table>
+</div>
+</div></div>
+{% endblock %}

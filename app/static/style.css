@@ -1,0 +1,17 @@
+body { background: #f5f6f8; }
+.card { border: 0; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.kpi .value { font-size: 2rem; font-weight: 600; line-height: 1.1; }
+.kpi .label { color: #6c757d; font-size: .85rem; text-transform: uppercase; letter-spacing: .03em; }
+.sev-critical { background: #7b1fa2 !important; color: #fff; }
+.sev-high     { background: #d32f2f !important; color: #fff; }
+.sev-medium   { background: #f57c00 !important; color: #fff; }
+.sev-low      { background: #1976d2 !important; color: #fff; }
+.sev-unknown, .sev-informational, .sev-info { background: #757575 !important; color: #fff; }
+.bar-row { display: grid; grid-template-columns: 140px 1fr 70px; gap: .5rem; align-items: center; margin-bottom: .4rem; font-size: .9rem; }
+.bar-row .track { background: #eceff1; border-radius: 4px; height: 14px; overflow: hidden; }
+.bar-row .fill { height: 100%; border-radius: 4px; background: #455a64; }
+.bar-row .num { text-align: right; font-variant-numeric: tabular-nums; }
+.table td, .table th { vertical-align: middle; }
+.table-vulns { font-size: .85rem; }
+.text-truncate-300 { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.num { font-variant-numeric: tabular-nums; }

@@ -1,0 +1,39 @@
+<!doctype html>
+<html><body style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #222;">
+<p>Hello {{ app.owner_name or 'Application Owner' }},</p>
+<p>Our vulnerability scanning has identified <strong>{{ total }}</strong> open vulnerabilities for application
+<strong>{{ app.app_id }}</strong>{% if app.app_name %} ({{ app.app_name }}){% endif %}.</p>
+
+{% set colors = {'critical': '#7b1fa2', 'high': '#d32f2f', 'medium': '#f57c00', 'low': '#1976d2'} %}
+<table cellpadding="8" cellspacing="0" style="border-collapse: collapse; margin-bottom: 16px;">
+  <tr>
+  {% for s in ['critical', 'high', 'medium', 'low'] %}
+    <td style="background: {{ colors[s] }}; color: #fff; text-align: center; min-width: 70px;">
+      <div style="font-size: 22px; font-weight: bold;">{{ severity_counts[s] }}</div><div style="font-size: 12px;">{{ s|title }}</div></td>
+  {% endfor %}
+    <td style="background: #eee; text-align: center; min-width: 90px;">
+      <div style="font-size: 22px; font-weight: bold; color: {{ '#d32f2f' if overdue else '#222' }};">{{ overdue }}</div><div style="font-size: 12px;">Past SLO</div></td>
+  </tr>
+</table>
+
+<p>Please remediate each item before its SLO date, or raise an exception request if remediation is not possible.
+The full list is attached as a CSV.</p>
+
+<table cellpadding="5" cellspacing="0" style="border-collapse: collapse; font-size: 12px; width: 100%;">
+  <tr style="background: #263238; color: #fff; text-align: left;">
+    <th>Severity</th><th>CVE</th><th>Package</th><th>Current</th><th>Recommended</th><th>Image / Asset</th><th>Env</th><th>SLO date</th>
+  </tr>
+  {% for v in vulns %}
+  <tr style="border-bottom: 1px solid #ddd; {% if loop.index is even %}background: #f7f7f7;{% endif %}">
+    <td style="color: {{ colors.get((v.severity or '')|lower, '#555') }}; font-weight: bold;">{{ v.severity or '' }}</td>
+    <td>{% if v.cve_link %}<a href="{{ v.cve_link }}">{{ v.cve_id }}</a>{% else %}{{ v.cve_id or '' }}{% endif %}</td>
+    <td>{{ v.package or '' }}</td><td>{{ v.current_version or '' }}</td><td>{{ v.recommended_version or '' }}</td>
+    <td>{% if v.image %}{{ v.image }}{% if v.image_tag %}:{{ v.image_tag }}{% endif %}{% else %}{{ v.asset_id or '' }}{% endif %}</td>
+    <td>{{ v.environment or '' }}</td>
+    <td style="{% if v.slo_date and v.slo_date < today %}color: #d32f2f; font-weight: bold;{% endif %}">{{ v.slo_date or '' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% if truncated %}<p><em>Showing the first {{ vulns|length }} of {{ total }} — see the attachment for the complete list.</em></p>{% endif %}
+<p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Vuln Notify.</p>
+</body></html>

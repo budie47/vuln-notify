@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% from "_macros.html" import sev_counts %}
+{% block title %}Dashboard · Vuln Notify{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-end mb-3 gap-2">
+  <h1 class="h3 mb-0">Dashboard</h1>
+  <small class="text-muted">
+    {% if last_upload %}Last upload: {{ last_upload.filename }} · {{ last_upload.uploaded_at|fmt_dt }} UTC{% else %}No data uploaded yet — <a href="{{ url_for('upload') }}">upload a CSV</a>.{% endif %}
+  </small>
+</div>
+
+<div class="row g-3 mb-4">
+  {% set kpis = [
+    ('Total vulnerabilities', stats.total_vulns, 'bug', ''),
+    ('Apps covered by this tool', stats.registered_apps, 'grid-3x3-gap', 'Registered App IDs'),
+    ('Apps with vulnerabilities', stats.apps_with_vulns, 'exclamation-triangle', stats.covered_apps ~ ' registered · ' ~ stats.unregistered_apps ~ ' unregistered'),
+    ('Critical + High', stats.critical_high, 'fire', ''),
+    ('Past SLO date', stats.overdue, 'alarm', 'As of ' ~ today),
+    ('Notifications sent', stats.notifications_sent, 'envelope-check', ''),
+  ] %}
+  {% for label, value, icon, sub in kpis %}
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card kpi h-100"><div class="card-body">
+      <div class="label"><i class="bi bi-{{ icon }}"></i> {{ label }}</div>
+      <div class="value num">{{ "{:,}".format(value) }}</div>
+      {% if sub %}<small class="text-muted">{{ sub }}</small>{% endif %}
+    </div></div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-4">
+    <div class="card h-100"><div class="card-body">
+      <h2 class="h6">By severity</h2>
+      {% set mx = (sev_rows|map(attribute=1)|max) if sev_rows else 1 %}
+      {% for name, n in sev_rows %}
+        <div class="bar-row"><span>{{ name }}</span>
+          <div class="track"><div class="fill sev-{{ name|lower }}" style="width: {{ (100 * n / mx)|round(1) }}%"></div></div>
+          <span class="num">{{ "{:,}".format(n) }}</span></div>
+      {% else %}<p class="text-muted mb-0">No data.</p>{% endfor %}
+    </div></div>
+  </div>
+  <div class="col-lg-4">
+    <div class="card h-100"><div class="card-body">
+      <h2 class="h6">By environment</h2>
+      {% set mx = (env_rows|map(attribute=1)|max) if env_rows else 1 %}
+      {% for name, n in env_rows %}
+        <div class="bar-row"><span class="text-truncate">{{ name }}</span>
+          <div class="track"><div class="fill" style="width: {{ (100 * n / mx)|round(1) }}%"></div></div>
+          <span class="num">{{ "{:,}".format(n) }}</span></div>
+      {% else %}<p class="text-muted mb-0">No data.</p>{% endfor %}
+    </div></div>
+  </div>
+  <div class="col-lg-4">
+    <div class="card h-100"><div class="card-body">
+      <h2 class="h6">Coverage</h2>
+      {% set cov = stats.apps_with_vulns and (100 * stats.covered_apps / stats.apps_with_vulns)|round(0) or 0 %}
+      <p class="mb-1">{{ stats.covered_apps }} of {{ stats.apps_with_vulns }} App IDs with findings have an owner registered.</p>
+      <div class="progress mb-3" style="height: 18px"><div class="progress-bar bg-success" style="width: {{ cov }}%">{{ cov|int }}%</div></div>
+      {% if stats.unregistered_apps %}
+        <a class="btn btn-sm btn-outline-warning" href="{{ url_for('apps_list', show='unregistered') }}"><i class="bi bi-person-plus"></i> Register {{ stats.unregistered_apps }} unowned App IDs</a>
+      {% endif %}
+      <hr>
+      <p class="mb-0 text-muted small">Vulnerabilities flagged with an exception: {{ "{:,}".format(stats.exceptions) }}</p>
+    </div></div>
+  </div>
+
+  <div class="col-12">
+    <div class="card"><div class="card-body">
+      <h2 class="h6">Top 10 applications by vulnerability count</h2>
+      <div class="table-responsive">
+      <table class="table table-sm mb-0">
+        <thead><tr><th>App ID</th><th class="text-end">Total</th><th>Critical / High / Medium / Low</th><th class="text-end">Past SLO</th><th>Owner registered</th></tr></thead>
+        <tbody>
+        {% for r in top_apps %}
+          <tr>
+            <td><a href="{{ url_for('app_detail', app_id=r.app_id) }}">{{ r.app_id or '(blank)' }}</a></td>
+            <td class="text-end num">{{ "{:,}".format(r.total) }}</td>
+            <td>{{ sev_counts(r) }}</td>
+            <td class="text-end num {% if r.overdue %}text-danger fw-semibold{% endif %}">{{ r.overdue }}</td>
+            <td>{% if r.app_id in registered %}<i class="bi bi-check-circle-fill text-success"></i>{% else %}<span class="text-warning"><i class="bi bi-exclamation-circle"></i> No</span>{% endif %}</td>
+          </tr>
+        {% else %}<tr><td colspan="5" class="text-muted">No data.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </div></div>
+  </div>
+</div>
+{% endblock %}

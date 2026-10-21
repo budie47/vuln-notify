@@ -1,0 +1,17 @@
+Hello {{ app.owner_name or 'Application Owner' }},
+
+Our vulnerability scanning has identified {{ total }} open vulnerabilities for application {{ app.app_id }}{% if app.app_name %} ({{ app.app_name }}){% endif %}.
+
+  Critical: {{ severity_counts.critical }}
+  High:     {{ severity_counts.high }}
+  Medium:   {{ severity_counts.medium }}
+  Low:      {{ severity_counts.low }}
+  Past SLO date: {{ overdue }}
+
+Please review the attached CSV for full details and remediate before each item's SLO date,
+or raise an exception request if remediation is not possible.
+
+{% for v in vulns %}- [{{ v.severity }}] {{ v.cve_id }} in {{ v.package }} {{ v.current_version }} -> {{ v.recommended_version or 'n/a' }} (SLO {{ v.slo_date or 'n/a' }})
+{% endfor %}{% if truncated %}... and {{ total - vulns|length }} more in the attachment.{% endif %}
+
+This is an automated message from Vuln Notify.

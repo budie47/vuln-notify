@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: vulnnotify
+      POSTGRES_USER: vulnnotify
+      POSTGRES_PASSWORD: vulnnotify
+    ports: ["5433:5432"]   # host 5432 is used by the local Postgres
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vulnnotify"]
+      interval: 3s
+      retries: 20
+
+  # Catches all outgoing email for local testing. Web UI: http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:v1.21
+    ports: ["8025:8025", "1025:1025"]
+
+  app:
+    build: .
+    depends_on:
+      db: { condition: service_healthy }
+      mailpit: { condition: service_started }
+    environment:
+      DATABASE_URL: postgresql+psycopg2://vulnnotify:vulnnotify@db:5432/vulnnotify
+      SECRET_KEY: change-me
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_USE_TLS: "false"
+      SMTP_USER: ""
+      SMTP_PASSWORD: ""
+      MAIL_FROM: vuln-notify@example.com
+    ports: ["5000:5000"]
+
+volumes:
+  pgdata:

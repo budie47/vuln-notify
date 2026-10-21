@@ -1,0 +1,19 @@
+{% macro sev_badge(sev) -%}
+  {% set s = (sev or 'unknown')|lower %}
+  <span class="badge sev-{{ s }}">{{ (sev or 'Unknown')|title }}</span>
+{%- endmacro %}
+
+{% macro sev_counts(c) -%}
+  <span class="badge sev-critical" title="Critical">{{ c.critical }}</span>
+  <span class="badge sev-high" title="High">{{ c.high }}</span>
+  <span class="badge sev-medium" title="Medium">{{ c.medium }}</span>
+  <span class="badge sev-low" title="Low">{{ c.low }}</span>
+{%- endmacro %}
+
+{% macro notify_button(app_id, enabled, next=None, size='sm') -%}
+  <form method="post" action="{{ url_for('app_notify', app_id=app_id) }}" class="d-inline"
+        onsubmit="return confirm('Send vulnerability notification email for {{ app_id }}?');">
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+    <button class="btn btn-{{ size }} btn-primary" {% if not enabled %}disabled{% endif %}><i class="bi bi-send"></i> Send notification</button>
+  </form>
+{%- endmacro %}
