@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_macros.html" import sev_counts, notify_button %}
+{% from "_pager.html" import pager, autosubmit_script %}
 {% block title %}Applications · Vuln Notify{% endblock %}
 {% block content %}
 <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
@@ -7,24 +8,70 @@
   <a class="btn btn-success" href="{{ url_for('app_new') }}"><i class="bi bi-plus-lg"></i> Add application</a>
 </div>
 
-<form class="row g-2 mb-3" method="get">
-  <div class="col-sm-5 col-lg-4"><input class="form-control" name="q" value="{{ q }}" placeholder="Search App ID, name, owner, email…"></div>
-  <div class="col-sm-4 col-lg-3">
-    <select class="form-select" name="show" onchange="this.form.submit()">
-      {% for v, l in [('all','All App IDs'),('with_vulns','With vulnerabilities'),('registered','Registered'),('unregistered','Unregistered (no owner)')] %}
-        <option value="{{ v }}" {% if show == v %}selected{% endif %}>{{ l }}</option>
-      {% endfor %}
-    </select>
+<form method="get" class="card mb-2" id="afilter"><div class="card-body py-2">
+  <div class="row g-2 align-items-end">
+    <div class="col-12 col-md-4 col-xl-3">
+      <label class="form-label small mb-0" for="a-q">Search</label>
+      <input class="form-control form-control-sm" id="a-q" name="q" value="{{ filters.q }}" placeholder="App ID, name, owner, email, department…">
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small mb-0" for="a-show">Status</label>
+      <select class="form-select form-select-sm autosubmit" id="a-show" name="show">
+        {% for v, l in [('', 'All App IDs'), ('with_vulns', 'With vulnerabilities'), ('registered', 'Registered'), ('unregistered', 'Unregistered (no owner)'), ('no_email', 'Registered, no email')] %}
+          <option value="{{ v }}" {% if filters.show == v %}selected{% endif %}>{{ l }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2 col-xl-1">
+      <label class="form-label small mb-0" for="a-sev">Severity</label>
+      <select class="form-select form-select-sm autosubmit" id="a-sev" name="severity">
+        <option value="">Any</option>
+        {% for sv in severities %}<option value="{{ sv }}" {% if filters.severity == sv %}selected{% endif %}>Has {{ sv }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2 col-xl-1">
+      <label class="form-label small mb-0" for="a-env">Environment</label>
+      <select class="form-select form-select-sm autosubmit" id="a-env" name="env">
+        <option value="">All</option>
+        {% for e in environments %}<option value="{{ e }}" {% if filters.env == e %}selected{% endif %}>{{ e }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2 col-xl-1">
+      <label class="form-label small mb-0" for="a-slo">SLO</label>
+      <select class="form-select form-select-sm autosubmit" id="a-slo" name="slo">
+        {% for v, l in [('', 'All'), ('overdue', 'Has past SLO'), ('within', 'None past SLO')] %}<option value="{{ v }}" {% if filters.slo == v %}selected{% endif %}>{{ l }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2 col-xl-1">
+      <label class="form-label small mb-0" for="a-exc">Exception</label>
+      <select class="form-select form-select-sm autosubmit" id="a-exc" name="exception">
+        {% for v, l in [('', 'All'), ('yes', 'Has exception'), ('no', 'No exception')] %}<option value="{{ v }}" {% if filters.exception == v %}selected{% endif %}>{{ l }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2 col-xl-1">
+      <label class="form-label small mb-0" for="a-ntf">Notified</label>
+      <select class="form-select form-select-sm autosubmit" id="a-ntf" name="notified">
+        {% for v, l in [('', 'All'), ('yes', 'Notified'), ('no', 'Never notified')] %}<option value="{{ v }}" {% if filters.notified == v %}selected{% endif %}>{{ l }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-12 col-xl-auto d-flex gap-2">
+      <button class="btn btn-sm btn-primary"><i class="bi bi-search"></i> Search</button>
+      {% if active %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('apps_list', per_page=pg.per_page) }}"><i class="bi bi-x-lg"></i> Clear</a>{% endif %}
+    </div>
   </div>
-  <div class="col-auto"><button class="btn btn-outline-secondary"><i class="bi bi-search"></i> Filter</button></div>
-</form>
+  {% if scoped %}<div class="small text-muted mt-1"><i class="bi bi-info-circle"></i> Vulnerability counts include only {{ filters.env ~ ' ' if filters.env }}vulnerabilities{{ ' with an exception' if filters.exception == 'yes' }}{{ ' without an exception' if filters.exception == 'no' }}. Notifications still send all of an app's vulnerabilities.</div>{% endif %}
+</div></form>
 
 {% if unassigned %}<div class="alert alert-secondary py-2">{{ unassigned }} vulnerabilities have no App ID and can't be routed.</div>{% endif %}
 
 <form method="post" action="{{ url_for('apps_notify_bulk') }}" id="bulk"
       onsubmit="return confirm('Send notification emails to all selected applications?');"></form>
 
-<div class="card"><div class="card-body p-0">
+<div class="card"><div class="card-header bg-white d-flex justify-content-between align-items-center py-2">
+  <small class="text-muted">Tick apps on this page to notify several at once.</small>
+  <button class="btn btn-primary btn-sm" form="bulk" id="bulkbtn" disabled><i class="bi bi-send"></i> Send to selected (<span id="selcount">0</span>)</button>
+</div>
+<div class="card-body p-0">
 <div class="table-responsive">
 <table class="table table-hover mb-0">
   <thead class="table-light">
@@ -51,7 +98,7 @@
           {% if not a.recipients() %}<span class="text-danger">No email set</span>{% endif %}
         {% endif %}
       </td>
-      <td class="text-end num fw-semibold">{{ "{:,}".format(r.counts.total) }}</td>
+      <td class="text-end num fw-semibold">{{ "{:,}".format(r.counts.total) }}{% if r.all_total is not none and r.all_total != r.counts.total %}<div class="small text-muted fw-normal">of {{ "{:,}".format(r.all_total) }}</div>{% endif %}</td>
       <td>{{ sev_counts(r.counts) }}</td>
       <td class="text-end num {% if r.counts.overdue %}text-danger fw-semibold{% endif %}">{{ r.counts.overdue }}</td>
       <td class="small text-muted">{{ r.last_notified|fmt_dt or '—' }}</td>
@@ -67,19 +114,17 @@
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="9" class="text-center text-muted py-4">No applications found.</td></tr>
+    <tr><td colspan="9" class="text-center text-muted py-4">{% if active %}No applications match these filters.{% else %}No applications found.{% endif %}</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
 </div>
-<div class="card-footer bg-white d-flex justify-content-between align-items-center">
-  <small class="text-muted">{{ rows|length }} App IDs</small>
-  <button class="btn btn-primary btn-sm" form="bulk" id="bulkbtn" disabled><i class="bi bi-send"></i> Send to selected (<span id="selcount">0</span>)</button>
-</div>
+{{ pager(pg, 'apps_list', {}, active, 'afilter', unfiltered) }}
 </div>
 {% endblock %}
 {% block scripts %}
+{{ autosubmit_script() }}
 <script>
   const checks = () => document.querySelectorAll('.rowcheck');
   const update = () => {

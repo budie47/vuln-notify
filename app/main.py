@@ -3,12 +3,12 @@ import os
 from datetime import date
 
 from flask import Flask, Response, abort, flash, redirect, render_template, request, url_for
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from . import importer, mailer
 from .models import (
-    VULN_FIELDS, Application, NotificationLog, SessionLocal, UploadLog, Vulnerability, init_db,
+    VULN_FIELDS, Application, NotificationLog, SessionLocal, UploadLog, Vulnerability, engine, init_db,
 )
 
 app = Flask(__name__)
@@ -19,12 +19,16 @@ SEVERITIES = ["critical", "high", "medium", "low"]
 PAGE_SIZES = ["10", "25", "50", "100", "all"]
 DEFAULT_PAGE_SIZE = "25"
 VULN_FILTER_ARGS = ("q", "severity", "env", "slo", "exception")
+APP_FILTER_ARGS = ("q", "show", "severity", "env", "slo", "exception", "notified")
 APP_FORM_FIELDS = [
     "app_id", "app_name", "owner_name", "owner_email", "notification_emails",
     "business_service", "department", "description",
 ]
 
 init_db()
+# gunicorn --preload imports this module once and then forks workers; drop the connection used by
+# init_db so workers never share a database socket.
+engine.dispose()
 
 
 @app.teardown_appcontext
@@ -53,6 +57,19 @@ def severity_summary(where=None):
     if where is not None:
         q = q.where(where)
     return {r.app_id: r._asdict() for r in SessionLocal.execute(q)}
+
+
+def paginate(total):
+    """Reads per_page/page from the request and returns paging info for `total` rows."""
+    per_page = request.args.get("per_page", DEFAULT_PAGE_SIZE)
+    if per_page not in PAGE_SIZES:
+        per_page = DEFAULT_PAGE_SIZE
+    size = total if per_page == "all" else int(per_page)
+    pages = max(1, -(-total // size)) if size else 1
+    page = min(max(request.args.get("page", 1, type=int), 1), pages)
+    offset = (page - 1) * size
+    return dict(per_page=per_page, page=page, pages=pages, offset=offset, limit=size, total=total,
+                first=offset + 1 if total else 0, last=min(offset + size, total), sizes=PAGE_SIZES)
 
 
 def get_app_or_404(app_id):
@@ -159,32 +176,74 @@ def dashboard():
 
 @app.route("/apps")
 def apps_list():
-    q = (request.args.get("q") or "").strip().lower()
-    show = request.args.get("show", "all")  # all / registered / unregistered / with_vulns
-    summary = severity_summary()
-    apps = {a.app_id: a for a in SessionLocal.scalars(select(Application)).all()}
-    last_notified = dict(SessionLocal.execute(
+    s = SessionLocal
+    f = {k: request.args.get(k, "").strip() for k in APP_FILTER_ARGS}
+    if f["show"] == "all":  # old links used show=all
+        f["show"] = ""
+
+    # Environment and exception narrow which vulnerabilities are counted for each app.
+    scope = []
+    if f["env"]:
+        scope.append(Vulnerability.environment.is_(None) if f["env"] == "(none)"
+                     else Vulnerability.environment == f["env"])
+    if f["exception"] == "yes":
+        scope.append(HAS_EXCEPTION)
+    elif f["exception"] == "no":
+        scope.append(~HAS_EXCEPTION)
+    summary = severity_summary(and_(*scope) if scope else None)
+    all_totals = {k: v["total"] for k, v in severity_summary().items()} if scope else None
+
+    apps = {a.app_id: a for a in s.scalars(select(Application)).all()}
+    last_notified = dict(s.execute(
         select(NotificationLog.app_id, func.max(NotificationLog.sent_at))
         .where(NotificationLog.status == "sent").group_by(NotificationLog.app_id)
     ).all())
+    env_label = func.coalesce(Vulnerability.environment, "(none)")
+    environments = s.scalars(select(env_label).distinct().order_by(env_label)).all()
 
+    q = f["q"].lower()
+    empty = {"total": 0, "overdue": 0, **{x: 0 for x in SEVERITIES}}
+    candidates = set(apps) | {k for k in (all_totals if scope else summary) if k}
     rows = []
-    for app_id in sorted(set(apps) | {k for k in summary if k}, key=str.lower):
+    for app_id in sorted(candidates, key=str.lower):
         a = apps.get(app_id)
-        counts = summary.get(app_id) or {"total": 0, "overdue": 0, **{x: 0 for x in SEVERITIES}}
-        if show == "registered" and not a:
+        counts = summary.get(app_id) or empty
+        if scope and not counts["total"]:
             continue
-        if show == "unregistered" and a:
+        if f["show"] == "registered" and not a:
             continue
-        if show == "with_vulns" and not counts["total"]:
+        if f["show"] == "unregistered" and a:
             continue
-        if q and q not in app_id.lower() and not (a and q in " ".join(
-            filter(None, [a.app_name, a.owner_name, a.owner_email, a.notification_emails])).lower()):
+        if f["show"] == "with_vulns" and not counts["total"]:
             continue
-        rows.append(dict(app_id=app_id, app=a, counts=counts, last_notified=last_notified.get(app_id)))
+        if f["show"] == "no_email" and (not a or a.recipients()):
+            continue
+        if f["severity"] in SEVERITIES and not counts[f["severity"]]:
+            continue
+        if f["slo"] == "overdue" and not counts["overdue"]:
+            continue
+        if f["slo"] == "within" and counts["overdue"]:
+            continue
+        if f["notified"] == "yes" and app_id not in last_notified:
+            continue
+        if f["notified"] == "no" and app_id in last_notified:
+            continue
+        if q:
+            haystack = [app_id] + ([a.app_name, a.owner_name, a.owner_email, a.notification_emails,
+                                    a.business_service, a.department] if a else [])
+            if q not in " ".join(filter(None, haystack)).lower():
+                continue
+        rows.append(dict(app_id=app_id, app=a, counts=counts, last_notified=last_notified.get(app_id),
+                         all_total=all_totals.get(app_id, 0) if scope else None))
+
+    pg = paginate(len(rows))
+    active = {k: v for k, v in f.items() if v}
     unassigned = (summary.get(None) or {}).get("total", 0)
-    return render_template("apps_list.html", rows=rows, q=q, show=show, severities=SEVERITIES,
-                           unassigned=unassigned)
+    return render_template(
+        "apps_list.html", rows=rows[pg["offset"]:pg["offset"] + pg["limit"]], filters=f, active=active,
+        severities=SEVERITIES, environments=environments, unassigned=unassigned, pg=pg,
+        unfiltered=len(candidates), scoped=bool(scope),
+    )
 
 
 def _app_from_form(a):
@@ -256,20 +315,9 @@ def app_detail(app_id):
         abort(404)
 
     filters = {k: request.args.get(k, "").strip() for k in VULN_FILTER_ARGS}
-    per_page = request.args.get("per_page", DEFAULT_PAGE_SIZE)
-    if per_page not in PAGE_SIZES:
-        per_page = DEFAULT_PAGE_SIZE
     q = vuln_query(app_id, filters)
-    matched = s.scalar(select(func.count()).select_from(q.order_by(None).subquery())) or 0
-    if per_page == "all":
-        page, pages = 1, 1
-    else:
-        size = int(per_page)
-        pages = max(1, -(-matched // size))
-        page = min(max(request.args.get("page", 1, type=int), 1), pages)
-        q = q.offset((page - 1) * size).limit(size)
-    vulns = s.scalars(q).all()
-    first = (page - 1) * (0 if per_page == "all" else int(per_page)) + 1 if vulns else 0
+    pg = paginate(s.scalar(select(func.count()).select_from(q.order_by(None).subquery())) or 0)
+    vulns = s.scalars(q.offset(pg["offset"]).limit(pg["limit"])).all() if pg["total"] else []
 
     env_label = func.coalesce(Vulnerability.environment, "(none)")
     environments = s.scalars(
@@ -283,8 +331,7 @@ def app_detail(app_id):
     return render_template(
         "app_detail.html", a=a, app_id=app_id, vulns=vulns, counts=counts, logs=logs,
         severities=SEVERITIES, today=date.today(), filters=filters, active=active,
-        environments=environments, per_page=per_page, page_sizes=PAGE_SIZES,
-        page=page, pages=pages, matched=matched, first=first, last=first + len(vulns) - 1,
+        environments=environments, pg=pg, per_page=pg["per_page"],
     )
 
 
