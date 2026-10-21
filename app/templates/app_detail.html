@@ -9,12 +9,13 @@
   </div>
   <div class="d-flex gap-2 flex-wrap">
     {% if a %}
-      {{ notify_button(app_id, a.recipients() and vulns, url_for('app_detail', app_id=app_id), '') }}
+      {{ notify_button(app_id, a.recipients() and counts, url_for('app_detail', app_id=app_id), '') }}
       <a class="btn btn-outline-secondary" href="{{ url_for('app_edit', app_id=app_id) }}"><i class="bi bi-pencil"></i> Edit</a>
     {% else %}
       <a class="btn btn-success" href="{{ url_for('app_new', app_id=app_id) }}"><i class="bi bi-person-plus"></i> Register owner</a>
     {% endif %}
-    {% if vulns %}<a class="btn btn-outline-secondary" href="{{ url_for('app_export', app_id=app_id) }}"><i class="bi bi-download"></i> CSV</a>{% endif %}
+    {% if counts %}<a class="btn btn-outline-secondary" href="{{ url_for('app_export', app_id=app_id, **active) }}"
+         title="{{ 'Exports the filtered list' if active else 'Exports all vulnerabilities' }}"><i class="bi bi-download"></i> CSV{% if active %} (filtered){% endif %}</a>{% endif %}
   </div>
 </div>
 
@@ -57,6 +58,45 @@
   </div>
 </div>
 
+<form method="get" class="card mb-2" id="vfilter"><div class="card-body py-2">
+  <div class="row g-2 align-items-end">
+    <div class="col-12 col-md-4 col-xl-3">
+      <label class="form-label small mb-0" for="f-q">Search</label>
+      <input class="form-control form-control-sm" id="f-q" name="q" value="{{ filters.q }}" placeholder="CVE, package, image, asset, alert ID…">
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small mb-0" for="f-sev">Severity</label>
+      <select class="form-select form-select-sm autosubmit" id="f-sev" name="severity">
+        <option value="">All</option>
+        {% for sv in severities + ['unknown'] %}<option value="{{ sv }}" {% if filters.severity == sv %}selected{% endif %}>{{ sv|title }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small mb-0" for="f-env">Environment</label>
+      <select class="form-select form-select-sm autosubmit" id="f-env" name="env">
+        <option value="">All</option>
+        {% for e in environments %}<option value="{{ e }}" {% if filters.env == e %}selected{% endif %}>{{ e }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2 col-xl-1">
+      <label class="form-label small mb-0" for="f-slo">SLO</label>
+      <select class="form-select form-select-sm autosubmit" id="f-slo" name="slo">
+        {% for v, l in [('', 'All'), ('overdue', 'Past SLO'), ('within', 'Within SLO')] %}<option value="{{ v }}" {% if filters.slo == v %}selected{% endif %}>{{ l }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2 col-xl-1">
+      <label class="form-label small mb-0" for="f-exc">Exception</label>
+      <select class="form-select form-select-sm autosubmit" id="f-exc" name="exception">
+        {% for v, l in [('', 'All'), ('yes', 'Has exception'), ('no', 'No exception')] %}<option value="{{ v }}" {% if filters.exception == v %}selected{% endif %}>{{ l }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-12 col-xl-auto d-flex gap-2">
+      <button class="btn btn-sm btn-primary"><i class="bi bi-search"></i> Search</button>
+      {% if active %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('app_detail', app_id=app_id, per_page=per_page) }}"><i class="bi bi-x-lg"></i> Clear</a>{% endif %}
+    </div>
+  </div>
+</div></form>
+
 <div class="card"><div class="card-body p-0">
 <div class="table-responsive">
 <table class="table table-sm table-striped table-vulns mb-0">
@@ -80,10 +120,43 @@
       <td class="small text-muted">{{ v.alert_id }}</td>
     </tr>
   {% else %}
-    <tr><td colspan="10" class="text-center text-muted py-4">No vulnerabilities for this App ID.</td></tr>
+    <tr><td colspan="10" class="text-center text-muted py-4">{% if active %}No vulnerabilities match these filters.{% else %}No vulnerabilities for this App ID.{% endif %}</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
-</div></div>
+</div>
+<div class="card-footer bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
+  <div class="d-flex align-items-center gap-2 small">
+    <label for="f-pp" class="text-muted mb-0">Show</label>
+    <select class="form-select form-select-sm autosubmit w-auto" id="f-pp" form="vfilter" name="per_page">
+      {% for n in page_sizes %}<option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n|title }}</option>{% endfor %}
+    </select>
+    <span class="text-muted">
+      {% if matched %}Showing {{ first }}–{{ last }} of {{ "{:,}".format(matched) }}{% else %}0 results{% endif %}
+      {% if active %} (filtered from {{ "{:,}".format(counts.total if counts else 0) }}){% endif %}
+    </span>
+  </div>
+  {% if pages > 1 %}
+  {% set pargs = dict(active, per_page=per_page) %}
+  <nav><ul class="pagination pagination-sm mb-0">
+    <li class="page-item {% if page == 1 %}disabled{% endif %}"><a class="page-link" href="{{ url_for('app_detail', app_id=app_id, page=page-1, **pargs) }}">&laquo;</a></li>
+    {% for p in range(1, pages + 1) %}
+      {% if p == 1 or p == pages or (p - page)|abs <= 2 %}
+        <li class="page-item {% if p == page %}active{% endif %}"><a class="page-link" href="{{ url_for('app_detail', app_id=app_id, page=p, **pargs) }}">{{ p }}</a></li>
+      {% elif (p - page)|abs == 3 %}
+        <li class="page-item disabled"><span class="page-link">…</span></li>
+      {% endif %}
+    {% endfor %}
+    <li class="page-item {% if page == pages %}disabled{% endif %}"><a class="page-link" href="{{ url_for('app_detail', app_id=app_id, page=page+1, **pargs) }}">&raquo;</a></li>
+  </ul></nav>
+  {% endif %}
+</div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  // Dropdown filters and page size apply immediately; the search box applies on Enter / Search.
+  document.querySelectorAll('.autosubmit').forEach(el => el.addEventListener('change', () => el.form.requestSubmit()));
+</script>
 {% endblock %}

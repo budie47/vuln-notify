@@ -3,7 +3,7 @@ import os
 from datetime import date
 
 from flask import Flask, Response, abort, flash, redirect, render_template, request, url_for
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from . import importer, mailer
@@ -16,6 +16,9 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-secret")
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200 MB uploads
 
 SEVERITIES = ["critical", "high", "medium", "low"]
+PAGE_SIZES = ["10", "25", "50", "100", "all"]
+DEFAULT_PAGE_SIZE = "25"
+VULN_FILTER_ARGS = ("q", "severity", "env", "slo", "exception")
 APP_FORM_FIELDS = [
     "app_id", "app_name", "owner_name", "owner_email", "notification_emails",
     "business_service", "department", "description",
@@ -59,12 +62,51 @@ def get_app_or_404(app_id):
     return a
 
 
-def vulns_for(app_id):
+# A vulnerability counts as excepted unless its Exception value is blank or a "no".
+HAS_EXCEPTION = func.lower(func.trim(func.coalesce(Vulnerability.exception, ""))).notin_(
+    ["", "no", "n", "false", "0"])
+
+
+def vuln_query(app_id, filters=None):
+    """Select for one App ID's vulnerabilities, sorted by severity then SLO date.
+
+    `filters` is a dict using the VULN_FILTER_ARGS keys (typically request.args).
+    """
+    f = filters or {}
     sev_rank = func.array_position(SEVERITIES, func.lower(Vulnerability.severity))
-    return SessionLocal.scalars(
-        select(Vulnerability).where(Vulnerability.app_id == app_id)
-        .order_by(sev_rank.nulls_last(), Vulnerability.slo_date.nulls_last(), Vulnerability.cve_id)
-    ).all()
+    q = select(Vulnerability).where(Vulnerability.app_id == app_id)
+
+    term = (f.get("q") or "").strip()
+    if term:
+        like = f"%{term}%"
+        q = q.where(or_(*[col.ilike(like) for col in (
+            Vulnerability.cve_id, Vulnerability.cve_description, Vulnerability.package,
+            Vulnerability.current_version, Vulnerability.recommended_version, Vulnerability.image,
+            Vulnerability.image_tag, Vulnerability.asset_id, Vulnerability.alert_id,
+            Vulnerability.cluster, Vulnerability.namespace, Vulnerability.exception_ritm,
+        )]))
+    if f.get("severity"):
+        if f["severity"] == "unknown":
+            q = q.where(or_(Vulnerability.severity.is_(None),
+                            func.lower(Vulnerability.severity).notin_(SEVERITIES)))
+        else:
+            q = q.where(func.lower(Vulnerability.severity) == f["severity"].lower())
+    if f.get("env"):
+        q = q.where(Vulnerability.environment.is_(None) if f["env"] == "(none)"
+                    else Vulnerability.environment == f["env"])
+    if f.get("slo") == "overdue":
+        q = q.where(Vulnerability.slo_date < date.today())
+    elif f.get("slo") == "within":
+        q = q.where(or_(Vulnerability.slo_date.is_(None), Vulnerability.slo_date >= date.today()))
+    if f.get("exception") == "yes":
+        q = q.where(HAS_EXCEPTION)
+    elif f.get("exception") == "no":
+        q = q.where(~HAS_EXCEPTION)
+    return q.order_by(sev_rank.nulls_last(), Vulnerability.slo_date.nulls_last(), Vulnerability.cve_id)
+
+
+def vulns_for(app_id, filters=None):
+    return SessionLocal.scalars(vuln_query(app_id, filters)).all()
 
 
 # ---------------------------------------------------------------- dashboard
@@ -100,7 +142,7 @@ def dashboard():
         overdue=sum(r["overdue"] for r in summary.values()),
         exceptions=s.scalar(
             select(func.count()).select_from(Vulnerability)
-            .where(func.coalesce(Vulnerability.exception, "").notin_(["", "No", "no", "N", "False", "false"]))
+            .where(HAS_EXCEPTION)
         ) or 0,
         notifications_sent=s.scalar(
             select(func.count()).select_from(NotificationLog).where(NotificationLog.status == "sent")
@@ -207,22 +249,48 @@ def app_delete(app_id):
 
 @app.route("/apps/<app_id>")
 def app_detail(app_id):
-    a = SessionLocal.scalar(select(Application).where(Application.app_id == app_id))
-    vulns = vulns_for(app_id)
-    if not a and not vulns:
-        abort(404)
+    s = SessionLocal
+    a = s.scalar(select(Application).where(Application.app_id == app_id))
     counts = severity_summary(Vulnerability.app_id == app_id).get(app_id)
-    logs = SessionLocal.scalars(
+    if not a and not counts:
+        abort(404)
+
+    filters = {k: request.args.get(k, "").strip() for k in VULN_FILTER_ARGS}
+    per_page = request.args.get("per_page", DEFAULT_PAGE_SIZE)
+    if per_page not in PAGE_SIZES:
+        per_page = DEFAULT_PAGE_SIZE
+    q = vuln_query(app_id, filters)
+    matched = s.scalar(select(func.count()).select_from(q.order_by(None).subquery())) or 0
+    if per_page == "all":
+        page, pages = 1, 1
+    else:
+        size = int(per_page)
+        pages = max(1, -(-matched // size))
+        page = min(max(request.args.get("page", 1, type=int), 1), pages)
+        q = q.offset((page - 1) * size).limit(size)
+    vulns = s.scalars(q).all()
+    first = (page - 1) * (0 if per_page == "all" else int(per_page)) + 1 if vulns else 0
+
+    env_label = func.coalesce(Vulnerability.environment, "(none)")
+    environments = s.scalars(
+        select(env_label).where(Vulnerability.app_id == app_id).distinct().order_by(env_label)
+    ).all()
+    logs = s.scalars(
         select(NotificationLog).where(NotificationLog.app_id == app_id)
         .order_by(NotificationLog.sent_at.desc()).limit(10)
     ).all()
-    return render_template("app_detail.html", a=a, app_id=app_id, vulns=vulns, counts=counts,
-                           logs=logs, severities=SEVERITIES, today=date.today())
+    active = {k: v for k, v in filters.items() if v}
+    return render_template(
+        "app_detail.html", a=a, app_id=app_id, vulns=vulns, counts=counts, logs=logs,
+        severities=SEVERITIES, today=date.today(), filters=filters, active=active,
+        environments=environments, per_page=per_page, page_sizes=PAGE_SIZES,
+        page=page, pages=pages, matched=matched, first=first, last=first + len(vulns) - 1,
+    )
 
 
 @app.route("/apps/<app_id>/export.csv")
 def app_export(app_id):
-    data = mailer.vulns_to_csv(vulns_for(app_id))
+    data = mailer.vulns_to_csv(vulns_for(app_id, request.args))
     return Response(data, mimetype="text/csv",
                     headers={"Content-Disposition": f"attachment; filename=vulnerabilities_{app_id}.csv"})
 
