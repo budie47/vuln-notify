@@ -1,13 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Upload CSV · Vuln Notify{% endblock %}
+{% block title %}Upload Data · Vuln Notify{% endblock %}
 {% block content %}
-<h1 class="h3 mb-3">Upload vulnerability CSV</h1>
+<h1 class="h3 mb-3">Upload Data</h1>
 <div class="row g-3">
   <div class="col-lg-6">
     <div class="card"><div class="card-body">
       <form method="post" enctype="multipart/form-data" onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='Uploading…';">
-        <div class="mb-3"><label class="form-label">CSV file</label>
-          <input class="form-control" type="file" name="file" accept=".csv,text/csv" required></div>
+        <div class="mb-3"><label class="form-label">Vulnerability file</label>
+          <input class="form-control" type="file" name="file" accept="{{ accept }}" required>
+          <div class="form-text">CSV (.csv) or Excel (.xlsx, .xlsm). For Excel, the first worksheet is read and its first non-empty row must be the headers.</div></div>
         <div class="mb-3">
           <div class="form-check"><input class="form-check-input" type="radio" name="mode" value="upsert" id="m1" checked>
             <label class="form-check-label" for="m1"><strong>Merge</strong> — insert new alerts, update existing ones (matched on Alert ID)</label></div>
@@ -15,7 +16,9 @@
             <label class="form-check-label" for="m2"><strong>Replace all</strong> — delete current vulnerability data first (use when the file is a full scan snapshot)</label></div>
         </div>
         <button class="btn btn-primary"><i class="bi bi-cloud-upload"></i> Upload</button>
-        <a class="btn btn-link" href="{{ url_for('upload_template') }}"><i class="bi bi-filetype-csv"></i> Download blank template</a>
+        <span class="ms-2 small text-muted">Blank template:</span>
+        <a class="btn btn-link btn-sm px-1" href="{{ url_for('upload_template_xlsx') }}"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+        <a class="btn btn-link btn-sm px-1" href="{{ url_for('upload_template') }}"><i class="bi bi-filetype-csv"></i> CSV</a>
       </form>
     </div></div>
   </div>

@@ -1,3 +1,4 @@
+import io
 import os
 from datetime import date
 
@@ -285,10 +286,10 @@ def upload():
     if request.method == "POST":
         f = request.files.get("file")
         if not f or not f.filename:
-            flash("Choose a CSV file to upload.", "warning")
+            flash("Choose a CSV or Excel file to upload.", "warning")
         else:
             try:
-                log = importer.load_csv(SessionLocal, f.read(), f.filename,
+                log = importer.load_file(SessionLocal, f.read(), f.filename,
                                         replace=request.form.get("mode") == "replace")
                 flash(f"Loaded {log.rows_loaded} of {log.rows_read} rows from {f.filename}"
                       + (f" — {log.rows_rejected} rejected." if log.rows_rejected else "."),
@@ -298,13 +299,33 @@ def upload():
                 flash(f"Upload failed: {e}", "danger")
         return redirect(url_for("upload"))
     logs = SessionLocal.scalars(select(UploadLog).order_by(UploadLog.id.desc()).limit(20)).all()
-    return render_template("upload.html", logs=logs, headers=[h for h, _, _ in VULN_FIELDS])
+    return render_template("upload.html", logs=logs, headers=[h for h, _, _ in VULN_FIELDS],
+                           accept=",".join(importer.SUPPORTED_EXTENSIONS))
 
 
 @app.route("/upload/template.csv")
 def upload_template():
     return Response(",".join(h for h, _, _ in VULN_FIELDS) + "\n", mimetype="text/csv",
                     headers={"Content-Disposition": "attachment; filename=vulnerability_template.csv"})
+
+
+@app.route("/upload/template.xlsx")
+def upload_template_xlsx():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Vulnerabilities"
+    ws.append([h for h, _, _ in VULN_FIELDS])
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    ws.freeze_panes = "A2"
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(buf.getvalue(),
+                    mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": "attachment; filename=vulnerability_template.xlsx"})
 
 
 if __name__ == "__main__":

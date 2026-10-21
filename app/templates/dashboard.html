@@ -5,7 +5,7 @@
 <div class="d-flex flex-wrap justify-content-between align-items-end mb-3 gap-2">
   <h1 class="h3 mb-0">Dashboard</h1>
   <small class="text-muted">
-    {% if last_upload %}Last upload: {{ last_upload.filename }} · {{ last_upload.uploaded_at|fmt_dt }} UTC{% else %}No data uploaded yet — <a href="{{ url_for('upload') }}">upload a CSV</a>.{% endif %}
+    {% if last_upload %}Last upload: {{ last_upload.filename }} · {{ last_upload.uploaded_at|fmt_dt }} UTC{% else %}No data uploaded yet — <a href="{{ url_for('upload') }}">upload data</a>.{% endif %}
   </small>
 </div>
 

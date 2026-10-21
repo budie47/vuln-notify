@@ -1,6 +1,6 @@
 # Vuln Notify (prototype)
 
-Loads vulnerability scan exports (CSV) into PostgreSQL, tracks App ID owners, and emails each
+Loads vulnerability scan exports (CSV or Excel) into PostgreSQL, tracks App ID owners, and emails each
 owner a summary plus a full CSV of their open vulnerabilities.
 
 ## Run
@@ -30,14 +30,14 @@ export DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/vulnnotify SM
 | **Dashboard** `/` | Total vulnerabilities, apps covered (registered), apps with findings, critical+high, past-SLO, breakdown by severity and environment, top 10 apps, owner coverage |
 | **Applications** `/apps` | Every App ID from the registry *and* the vulnerability data, with counts by severity. Add / edit / delete apps, **Send notification** per app, or tick several and **Send to selected**. Unregistered App IDs get a "Register owner" button that pre-fills from the scan data |
 | **App detail** `/apps/<id>` | Owner + recipients, the full vulnerability list, CSV export, notification history |
-| **Upload CSV** `/upload` | **Merge** (upsert on `Alert ID`) or **Replace all**. Headers are matched case/space-insensitively and `Enviroment` is accepted. Bad rows are rejected and listed |
+| **Upload Data** `/upload` | Accepts `.csv` and `.xlsx`/`.xlsm` (first worksheet; old `.xls` must be re-saved as `.xlsx`). **Merge** (upsert on `Alert ID`) or **Replace all**. Headers are matched case/space-insensitively and `Enviroment` is accepted. Bad rows are rejected and listed |
 | **Notification log** `/notifications` | Every send attempt with recipients and status/error |
 
 Recipients = owner email + "additional notification emails" (comma/semicolon/newline separated), de-duplicated.
 
 ## Code layout
 - `app/models.py` – tables; `VULN_FIELDS` is the single list of CSV columns
-- `app/importer.py` – CSV parsing and batched upsert
+- `app/importer.py` – CSV / Excel parsing and batched upsert
 - `app/mailer.py` – SMTP send, HTML/text email, CSV attachment
 - `app/main.py` – Flask routes
 - `app/templates/` – Bootstrap pages and the email templates

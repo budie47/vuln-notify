@@ -15,7 +15,7 @@
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav"><span class="navbar-toggler-icon"></span></button>
     <div class="collapse navbar-collapse" id="nav">
       <ul class="navbar-nav">
-        {% for ep, label, icon in [('dashboard','Dashboard','speedometer2'),('apps_list','Applications','grid-3x3-gap'),('upload','Upload CSV','cloud-upload'),('notifications','Notification log','envelope-check')] %}
+        {% for ep, label, icon in [('dashboard','Dashboard','speedometer2'),('apps_list','Applications','grid-3x3-gap'),('upload','Upload Data','cloud-upload'),('notifications','Notification log','envelope-check')] %}
         <li class="nav-item"><a class="nav-link {% if request.endpoint == ep %}active{% endif %}" href="{{ url_for(ep) }}"><i class="bi bi-{{ icon }}"></i> {{ label }}</a></li>
         {% endfor %}
       </ul>
