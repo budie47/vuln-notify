@@ -5,18 +5,19 @@
 <div class="d-flex flex-wrap justify-content-between align-items-end mb-3 gap-2">
   <h1 class="h3 mb-0">Dashboard</h1>
   <small class="text-muted">
-    {% if last_upload %}Last upload: {{ last_upload.filename }} · {{ last_upload.uploaded_at|fmt_dt }} UTC{% else %}No data uploaded yet — <a href="{{ url_for('upload') }}">upload data</a>.{% endif %}
+    {% if last_run %}Last import: <a href="{{ url_for('run_detail', run_id=last_run.id) }}">#{{ last_run.id }}</a> · {{ last_run.finalized_at|fmt_dt }} UTC{% elif last_upload %}Last upload: {{ last_upload.filename }} · {{ last_upload.uploaded_at|fmt_dt }} UTC{% else %}No data uploaded yet — <a href="{{ url_for('upload') }}">upload data</a>.{% endif %}
   </small>
 </div>
 
 <div class="row g-3 mb-4">
   {% set kpis = [
-    ('Total vulnerabilities', stats.total_vulns, 'bug', ''),
+    ('Open vulnerabilities', stats.total_vulns, 'bug', ''),
     ('Apps covered by this tool', stats.registered_apps, 'grid-3x3-gap', 'Registered App IDs'),
-    ('Apps with vulnerabilities', stats.apps_with_vulns, 'exclamation-triangle', stats.covered_apps ~ ' registered · ' ~ stats.unregistered_apps ~ ' unregistered'),
+    ('Apps with open vulnerabilities', stats.apps_with_vulns, 'exclamation-triangle', stats.covered_apps ~ ' registered · ' ~ stats.unregistered_apps ~ ' unregistered'),
     ('Critical + High', stats.critical_high, 'fire', ''),
     ('Past SLO date', stats.overdue, 'alarm', 'As of ' ~ today),
-    ('Notifications sent', stats.notifications_sent, 'envelope-check', ''),
+    ('Remediated · last 30 days', stats.remediated_30d, 'check2-circle',
+      "{:,}".format(stats.remediated_total) ~ ' all time' ~ (' · avg ' ~ stats.avg_days_to_fix ~ ' days to fix' if stats.avg_days_to_fix is not none else '')),
   ] %}
   {% for label, value, icon, sub in kpis %}
   <div class="col-6 col-md-4 col-xl-2">
@@ -62,7 +63,11 @@
         <a class="btn btn-sm btn-outline-warning" href="{{ url_for('apps_list', show='unregistered') }}"><i class="bi bi-person-plus"></i> Register {{ stats.unregistered_apps }} unowned App IDs</a>
       {% endif %}
       <hr>
-      <p class="mb-0 text-muted small">Vulnerabilities flagged with an exception: {{ "{:,}".format(stats.exceptions) }}</p>
+      {% if stats.not_seen %}<p class="mb-1 small"><a class="text-warning text-decoration-none" href="{{ url_for('apps_list', show='not_seen') }}"><i class="bi bi-eye-slash"></i> {{ "{:,}".format(stats.not_seen) }} open vulnerabilities not rescanned in {{ not_seen_days }}+ days</a></p>{% endif %}
+      <p class="mb-1 text-muted small">Open vulnerabilities flagged with an exception: {{ "{:,}".format(stats.exceptions) }}</p>
+      <p class="mb-1 text-muted small">Notifications sent: {{ "{:,}".format(stats.notifications_sent) }}</p>
+      {% if rem_sev %}<p class="mb-0 small text-muted">Remediated in last 30 days:
+        {% for name in ['Critical', 'High', 'Medium', 'Low', 'Unknown'] if rem_sev.get(name) %}<span class="badge sev-{{ name|lower }}">{{ rem_sev[name] }} {{ name }}</span> {% endfor %}</p>{% endif %}
     </div></div>
   </div>
 

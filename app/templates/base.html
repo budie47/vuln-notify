@@ -16,13 +16,19 @@
     <div class="collapse navbar-collapse" id="nav">
       <ul class="navbar-nav">
         {% for ep, label, icon in [('dashboard','Dashboard','speedometer2'),('apps_list','Applications','grid-3x3-gap'),('upload','Upload Data','cloud-upload'),('notifications','Notification log','envelope-check')] %}
-        <li class="nav-item"><a class="nav-link {% if request.endpoint == ep %}active{% endif %}" href="{{ url_for(ep) }}"><i class="bi bi-{{ icon }}"></i> {{ label }}</a></li>
+        <li class="nav-item"><a class="nav-link {% if request.endpoint == ep or (ep == 'upload' and request.endpoint == 'run_detail') %}active{% endif %}" href="{{ url_for(ep) }}"><i class="bi bi-{{ icon }}"></i> {{ label }}{% if ep == 'upload' and draft_run %} <span class="badge text-bg-warning">draft</span>{% endif %}</a></li>
         {% endfor %}
       </ul>
     </div>
   </div>
 </nav>
 <main class="container-fluid px-4 pb-5">
+  {% if draft_run and request.endpoint not in ('run_detail',) %}
+    <div class="alert alert-warning py-2 d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <span><i class="bi bi-hourglass-split"></i> Import #{{ draft_run.id }} is waiting to be finalized — its files are not live yet.</span>
+      <a class="btn btn-sm btn-warning" href="{{ url_for('run_detail', run_id=draft_run.id) }}">Review &amp; finalize</a>
+    </div>
+  {% endif %}
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% for cat, msg in messages %}
       <div class="alert alert-{{ cat }} alert-dismissible fade show" role="alert">{{ msg }}

@@ -7,10 +7,11 @@ from datetime import date, datetime
 from openpyxl import load_workbook
 
 from dateutil import parser as dateparser
-from sqlalchemy import delete
+from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 
-from .models import VULN_FIELDS, UploadLog, Vulnerability
+from .models import VULN_FIELDS, ImportRun, StagedVulnerability, UploadLog
 
 BATCH_SIZE = 1000
 
@@ -77,7 +78,7 @@ def _read_excel(file_bytes):
     return headers, body()
 
 
-def load_file(session, file_bytes, filename, replace=False):
+def _read_rows(file_bytes, filename):
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext == ".csv":
         headers, rows = _read_csv(file_bytes)
@@ -98,31 +99,58 @@ def load_file(session, file_bytes, filename, replace=False):
         raise ValueError("File must contain an 'Alert ID' column.")
     if not any(col == "app_id" for col, _ in mapping.values()):
         raise ValueError("File must contain an 'App ID' column.")
+    return mapping, rows
 
-    log = UploadLog(filename=filename, mode="replace" if replace else "upsert")
+
+# ---------------------------------------------------------------- import runs
+
+def get_or_create_draft(session):
+    run = session.scalar(select(ImportRun).where(ImportRun.status == "draft"))
+    if run:
+        return run
+    run = ImportRun(status="draft")
+    session.add(run)
+    try:
+        session.flush()
+    except IntegrityError:  # another request created the draft at the same moment
+        session.rollback()
+        run = session.scalar(select(ImportRun).where(ImportRun.status == "draft"))
+    return run
+
+
+def stage_file(session, run, file_bytes, filename):
+    """Parses a file into the run's staging rows. Live data is not touched.
+
+    The same Alert ID in a later file of the same run replaces the earlier one.
+    """
+    if run.status != "draft":
+        raise ValueError("This import has already been finalized or discarded.")
+    mapping, rows = _read_rows(file_bytes, filename)
+
+    log = UploadLog(filename=filename, mode="staged", run_id=run.id)
     session.add(log)
     session.flush()
 
-    if replace:
-        session.execute(delete(Vulnerability))
-
-    errors, batch, seen = [], {}, 0
-    loaded = rejected = 0
+    st = StagedVulnerability.__table__
+    errors, batch = [], {}
+    read = staged = rejected = 0
 
     def flush_batch():
-        nonlocal loaded
+        nonlocal staged
         if not batch:
             return
-        rows = list(batch.values())
-        stmt = insert(Vulnerability.__table__).values(rows)
-        update_cols = {c: stmt.excluded[c] for c in rows[0] if c != "alert_id"}
-        session.execute(stmt.on_conflict_do_update(index_elements=["alert_id"], set_=update_cols))
-        loaded += len(rows)
+        values = list(batch.values())
+        stmt = insert(st).values(values)
+        session.execute(stmt.on_conflict_do_update(
+            constraint="uq_staged_run_alert",
+            set_={c: stmt.excluded[c] for c in values[0] if c not in ("run_id", "alert_id")},
+        ))
+        staged += len(values)
         batch.clear()
 
     all_cols = {name for _, name, _ in VULN_FIELDS}
     for line_no, raw in rows:
-        seen += 1
+        read += 1
         row, row_err = {c: None for c in all_cols}, None
         for header, (col, kind) in mapping.items():
             try:
@@ -137,16 +165,116 @@ def load_file(session, file_bytes, filename, replace=False):
             if len(errors) < 50:
                 errors.append(row_err)
             continue
-        row["upload_id"] = log.id
+        row.update(run_id=run.id, upload_id=log.id, line_no=line_no)
         # Last occurrence wins when the same Alert ID appears twice in one batch.
         batch[row["alert_id"]] = row
         if len(batch) >= BATCH_SIZE:
             flush_batch()
     flush_batch()
 
-    log.rows_read = seen
-    log.rows_loaded = loaded
+    log.rows_read = read
+    log.rows_loaded = staged
     log.rows_rejected = rejected
     log.errors = "\n".join(errors) or None
     session.commit()
     return log
+
+
+# A staged row against the stored one (v), by Last Scan. NULL scan dates count as "newer"
+# so data without scan dates still flows through.
+_NEWER = "(s.last_scan IS NULL OR v.last_scan IS NULL OR s.last_scan > v.last_scan)"
+_SAME_OR_NEWER = "(s.last_scan IS NULL OR v.last_scan IS NULL OR s.last_scan >= v.last_scan)"
+
+# Open alerts to remediate: on an asset this run scanned more recently than the alert was last
+# seen, and missing from the run. Assets the run did not include are never touched.
+_REMEDIATE_FROM = """
+    FROM vulnerabilities v
+    JOIN (SELECT asset_id, max(last_scan) AS scan FROM staged_vulnerabilities
+          WHERE run_id = :run AND asset_id IS NOT NULL GROUP BY asset_id) rs ON rs.asset_id = v.asset_id
+    WHERE v.status = 'open'
+      AND NOT EXISTS (SELECT 1 FROM staged_vulnerabilities s WHERE s.run_id = :run AND s.alert_id = v.alert_id)
+      AND (v.last_scan IS NULL OR rs.scan IS NULL OR rs.scan > v.last_scan)
+"""
+
+
+def preview_run(session, run, sample_limit=200):
+    """What finalizing would do, without changing anything."""
+    p = {"run": run.id}
+    counts = session.execute(text(f"""
+        SELECT
+          count(*) FILTER (WHERE v.id IS NULL) AS new,
+          count(*) FILTER (WHERE v.status = 'open' AND {_SAME_OR_NEWER}) AS updated,
+          count(*) FILTER (WHERE v.status = 'remediated' AND {_NEWER}) AS reopened,
+          count(*) FILTER (WHERE v.id IS NOT NULL AND NOT (
+              (v.status = 'open' AND {_SAME_OR_NEWER}) OR (v.status = 'remediated' AND {_NEWER}))) AS skipped,
+          count(DISTINCT s.asset_id) AS assets,
+          count(*) AS staged
+        FROM staged_vulnerabilities s LEFT JOIN vulnerabilities v ON v.alert_id = s.alert_id
+        WHERE s.run_id = :run
+    """), p).one()._asdict()
+    counts["remediated"] = session.scalar(text("SELECT count(*) " + _REMEDIATE_FROM), p)
+    remediate_sample = session.execute(text(f"""
+        SELECT v.app_id, v.asset_id, v.image, v.image_tag, v.cve_id, v.severity, v.package,
+               v.last_scan AS last_seen_scan, rs.scan AS new_scan {_REMEDIATE_FROM}
+        ORDER BY v.app_id, v.asset_id, v.cve_id LIMIT :lim
+    """), dict(p, lim=sample_limit)).mappings().all()
+    remediate_by_app = session.execute(text(f"""
+        SELECT v.app_id, count(*) AS n {_REMEDIATE_FROM} GROUP BY v.app_id ORDER BY n DESC
+    """), p).all()
+    reopen_sample = session.execute(text(f"""
+        SELECT v.app_id, v.asset_id, v.cve_id, v.severity, v.remediated_at, s.last_scan AS new_scan
+        FROM staged_vulnerabilities s JOIN vulnerabilities v ON v.alert_id = s.alert_id
+        WHERE s.run_id = :run AND v.status = 'remediated' AND {_NEWER}
+        ORDER BY v.app_id, v.cve_id LIMIT :lim
+    """), dict(p, lim=sample_limit)).mappings().all()
+    return dict(counts=counts, remediate_sample=remediate_sample, remediate_by_app=remediate_by_app,
+                reopen_sample=reopen_sample)
+
+
+def finalize_run(session, run):
+    """Applies the run: insert new alerts, update/reopen known ones, mark remediated, clear staging."""
+    if run.status != "draft":
+        raise ValueError("This import has already been finalized or discarded.")
+    session.execute(text("SELECT pg_advisory_xact_lock(724002)"))  # one finalize at a time
+    counts = preview_run(session, run, sample_limit=0)["counts"]
+    now = datetime.utcnow()
+    p = {"run": run.id, "now": now}
+    cols = [name for _, name, _ in VULN_FIELDS]
+    col_list = ", ".join(cols)
+
+    # Remediate first: it only looks at alerts NOT in the run, so it is independent of the updates.
+    session.execute(text(f"""
+        UPDATE vulnerabilities SET status = 'remediated', remediated_at = :now, remediated_run_id = :run
+        WHERE id IN (SELECT v.id {_REMEDIATE_FROM})
+    """), p)
+    session.execute(text(f"""
+        UPDATE vulnerabilities v SET {", ".join(f"{c} = s.{c}" for c in cols if c != "alert_id")},
+               upload_id = s.upload_id, run_id = :run, uploaded_at = :now, last_seen_at = :now,
+               reopened_at = CASE WHEN v.status = 'remediated' THEN :now ELSE v.reopened_at END,
+               status = 'open', remediated_at = NULL, remediated_run_id = NULL
+        FROM staged_vulnerabilities s
+        WHERE s.run_id = :run AND s.alert_id = v.alert_id
+          AND ((v.status = 'open' AND {_SAME_OR_NEWER}) OR (v.status = 'remediated' AND {_NEWER}))
+    """), p)
+    session.execute(text(f"""
+        INSERT INTO vulnerabilities ({col_list}, upload_id, run_id, uploaded_at, first_seen_at, last_seen_at, status)
+        SELECT {", ".join("s." + c for c in cols)}, s.upload_id, :run, :now, :now, :now, 'open'
+        FROM staged_vulnerabilities s
+        WHERE s.run_id = :run AND NOT EXISTS (SELECT 1 FROM vulnerabilities v WHERE v.alert_id = s.alert_id)
+    """), p)
+    session.execute(delete(StagedVulnerability).where(StagedVulnerability.run_id == run.id))
+
+    run.status, run.finalized_at = "finalized", now
+    run.rows_new, run.rows_updated, run.rows_reopened = counts["new"], counts["updated"], counts["reopened"]
+    run.rows_skipped, run.rows_remediated = counts["skipped"], counts["remediated"]
+    run.assets_scanned = counts["assets"]
+    session.commit()
+    return run
+
+
+def discard_run(session, run):
+    if run.status != "draft":
+        raise ValueError("Only a draft import can be discarded.")
+    session.execute(delete(StagedVulnerability).where(StagedVulnerability.run_id == run.id))
+    run.status = "discarded"
+    session.commit()

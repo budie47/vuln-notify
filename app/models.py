@@ -2,9 +2,12 @@ import os
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, Date, DateTime, Integer, String, Text, create_engine, Index,
+    Column, Date, DateTime, Integer, String, Text, create_engine, Index, UniqueConstraint, text,
 )
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
+
+# An open vulnerability whose asset has had no new scan for this many days is "not seen recently".
+NOT_SEEN_DAYS = int(os.environ.get("NOT_SEEN_DAYS", "90"))
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql+psycopg2://vulnnotify:vulnnotify@localhost:5432/vulnnotify"
@@ -76,7 +79,17 @@ _vuln_attrs = {
     "__tablename__": "vulnerabilities",
     "id": Column(Integer, primary_key=True),
     "uploaded_at": Column(DateTime, default=datetime.utcnow, nullable=False),
+    # Upload (file) and import run that last supplied this alert.
     "upload_id": Column(Integer, index=True),
+    "run_id": Column(Integer),
+    # Lifecycle. "open" until a finalized import run shows the same asset scanned more recently
+    # without this alert; then "remediated". Found again in a newer scan -> open, reopened_at set.
+    "status": Column(String(16), nullable=False, default="open", server_default="open"),
+    "first_seen_at": Column(DateTime, default=datetime.utcnow),
+    "last_seen_at": Column(DateTime, default=datetime.utcnow),
+    "remediated_at": Column(DateTime),
+    "remediated_run_id": Column(Integer),
+    "reopened_at": Column(DateTime),
 }
 for _header, _name, _kind in VULN_FIELDS:
     _vuln_attrs[_name] = Column(_SQL_TYPES[_kind]())
@@ -84,9 +97,49 @@ _vuln_attrs["alert_id"] = Column(String(512), unique=True, nullable=False)
 _vuln_attrs["__table_args__"] = (
     Index("ix_vuln_app_id", "app_id"),
     Index("ix_vuln_severity", "severity"),
+    Index("ix_vuln_status", "status"),
+    Index("ix_vuln_asset_id", "asset_id"),
 )
 
 Vulnerability = type("Vulnerability", (Base,), _vuln_attrs)
+
+# Rows of a draft import run, held here until the run is finalized (or discarded).
+_staged_attrs = {
+    "__tablename__": "staged_vulnerabilities",
+    "id": Column(Integer, primary_key=True),
+    "run_id": Column(Integer, nullable=False),
+    "upload_id": Column(Integer, nullable=False),
+    "line_no": Column(Integer),
+}
+for _header, _name, _kind in VULN_FIELDS:
+    _staged_attrs[_name] = Column(_SQL_TYPES[_kind]())
+_staged_attrs["alert_id"] = Column(String(512), nullable=False)
+_staged_attrs["__table_args__"] = (
+    UniqueConstraint("run_id", "alert_id", name="uq_staged_run_alert"),
+    Index("ix_staged_run_asset", "run_id", "asset_id"),
+)
+StagedVulnerability = type("StagedVulnerability", (Base,), _staged_attrs)
+
+
+class ImportRun(Base):
+    """A set of uploaded files applied together. status: draft -> finalized | discarded."""
+    __tablename__ = "import_runs"
+
+    id = Column(Integer, primary_key=True)
+    status = Column(String(16), nullable=False, default="draft")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    finalized_at = Column(DateTime)
+    rows_new = Column(Integer, default=0)
+    rows_updated = Column(Integer, default=0)
+    rows_reopened = Column(Integer, default=0)
+    rows_skipped = Column(Integer, default=0)   # older than what is already stored
+    rows_remediated = Column(Integer, default=0)
+    assets_scanned = Column(Integer, default=0)
+
+    __table_args__ = (
+        # At most one draft at a time.
+        Index("uq_one_draft_run", "status", unique=True, postgresql_where=text("status = 'draft'")),
+    )
 
 
 class Application(Base):
@@ -123,6 +176,7 @@ class UploadLog(Base):
     filename = Column(String(512))
     uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     mode = Column(String(32))
+    run_id = Column(Integer, index=True)
     rows_read = Column(Integer, default=0)
     rows_loaded = Column(Integer, default=0)
     rows_rejected = Column(Integer, default=0)
@@ -141,5 +195,29 @@ class NotificationLog(Base):
     sent_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+# create_all only creates missing tables; columns added to existing tables are added here.
+# Every statement is idempotent and runs on each start.
+_MIGRATIONS = [
+    "ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS run_id integer",
+    "ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS status varchar(16) NOT NULL DEFAULT 'open'",
+    "ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS first_seen_at timestamp",
+    "ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS last_seen_at timestamp",
+    "ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS remediated_at timestamp",
+    "ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS remediated_run_id integer",
+    "ALTER TABLE vulnerabilities ADD COLUMN IF NOT EXISTS reopened_at timestamp",
+    "UPDATE vulnerabilities SET first_seen_at = uploaded_at WHERE first_seen_at IS NULL",
+    "UPDATE vulnerabilities SET last_seen_at = uploaded_at WHERE last_seen_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS ix_vuln_status ON vulnerabilities (status)",
+    "CREATE INDEX IF NOT EXISTS ix_vuln_asset_id ON vulnerabilities (asset_id)",
+    "ALTER TABLE upload_logs ADD COLUMN IF NOT EXISTS run_id integer",
+    "CREATE INDEX IF NOT EXISTS ix_upload_logs_run_id ON upload_logs (run_id)",
+]
+
+
 def init_db():
     Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        # Serialise concurrent starts (several workers / containers) on the same database.
+        conn.execute(text("SELECT pg_advisory_xact_lock(724001)"))
+        for stmt in _MIGRATIONS:
+            conn.execute(text(stmt))

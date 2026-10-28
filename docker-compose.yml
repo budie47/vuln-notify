@@ -34,6 +34,7 @@ services:
       SMTP_USER: ""
       SMTP_PASSWORD: ""
       MAIL_FROM: vuln-notify@example.com
+      NOT_SEEN_DAYS: "90"   # open alerts with no newer scan of their asset for this long are flagged
     ports: ["5000:5000"]
 
 volumes:

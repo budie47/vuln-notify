@@ -25,16 +25,18 @@ def main(n=500):
         w = csv.writer(f); w.writerow(HEADERS)
         for i in range(n):
             app = rnd.choice(APPS); sev = rnd.choices(list(SLO_DAYS), [1, 3, 5, 3])[0]
+            # Each app runs a small, fixed set of deployed images; each image has many findings.
+            slot = rnd.randrange(6); asset = f"{app[0].lower()}-img-{slot}"
             pkg = rnd.choice(PKGS); opened = now - timedelta(days=rnd.randint(1, 200))
             cve = f"CVE-202{rnd.randint(1,5)}-{rnd.randint(1000,49999)}"; img = f"{app[1].lower().replace(' ','-')}"
             exc = "Yes" if rnd.random() < .05 else "No"
             w.writerow([f"CSB-{rnd.randint(100,999)}", f"ALRT-{i:06d}", now.isoformat(), sev, opened.isoformat(),
               (now-opened).days, (opened+timedelta(days=SLO_DAYS[sev])).date(), exc, f"RITM{rnd.randint(1000000,9999999)}" if exc=="Yes" else "",
               f"{rnd.randint(10**11,10**12-1)}", f"acct-{app[2].lower().replace(' ','-')}", rnd.choice(["AWS","Azure","GCP"]),
-              rnd.choice(["Production","Staging","Development"]), f"i-{rnd.getrandbits(48):012x}", "Container Image", cve,
+              ["Production","Staging","Development"][slot % 3], asset, "Deployed Image", cve,
               f"Vulnerability in {pkg[0]} allowing potential compromise.", f"https://nvd.nist.gov/vuln/detail/{cve}",
               f"aks-{rnd.choice(['east','west'])}-01", img, f"{img}-{rnd.randint(1,5)}", f"org/{img}", "registry.example.com",
-              f"registry.example.com/org/{img}", f"1.{rnd.randint(0,9)}.{rnd.randint(0,20)}", (opened-timedelta(days=30)).isoformat(),
+              f"registry.example.com/org/{img}", f"1.{slot}.0", (opened-timedelta(days=30)).isoformat(),
               pkg[0], pkg[1], pkg[2], f"/usr/lib/{pkg[0]}", f"sha256:{rnd.getrandbits(64):016x}", "RUN apt-get install -y ...",
               "debian", "11", "2026-06-30", "Example Firm", rnd.choice(["US","UK","SG","MY"]), "CMS-01", "Technology",
               app[0], app[1], app[2], app[3], "Technology", rnd.choice(["Confidential","Internal"]), "Standard"])

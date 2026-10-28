@@ -8,7 +8,7 @@
     </select>
     <span class="text-muted">
       {% if pg.total %}Showing {{ pg.first }}–{{ pg.last }} of {{ "{:,}".format(pg.total) }}{% else %}0 results{% endif %}
-      {% if args and unfiltered is not none %} (filtered from {{ "{:,}".format(unfiltered) }}){% endif %}
+      {% if args and unfiltered is not none and unfiltered != pg.total %} (filtered from {{ "{:,}".format(unfiltered) }}){% endif %}
     </span>
   </div>
   {% if pg.pages > 1 %}

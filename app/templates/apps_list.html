@@ -17,7 +17,7 @@
     <div class="col-6 col-md-2">
       <label class="form-label small mb-0" for="a-show">Status</label>
       <select class="form-select form-select-sm autosubmit" id="a-show" name="show">
-        {% for v, l in [('', 'All App IDs'), ('with_vulns', 'With vulnerabilities'), ('registered', 'Registered'), ('unregistered', 'Unregistered (no owner)'), ('no_email', 'Registered, no email')] %}
+        {% for v, l in [('', 'All App IDs'), ('with_vulns', 'With vulnerabilities'), ('registered', 'Registered'), ('unregistered', 'Unregistered (no owner)'), ('no_email', 'Registered, no email'), ('not_seen', 'Not rescanned ' ~ not_seen_days ~ '+ days'), ('all_fixed', 'All remediated')] %}
           <option value="{{ v }}" {% if filters.show == v %}selected{% endif %}>{{ l }}</option>
         {% endfor %}
       </select>
@@ -78,8 +78,8 @@
     <tr>
       <th style="width:32px"><input type="checkbox" class="form-check-input" id="checkall" title="Select all"></th>
       <th>App ID</th><th>Name</th><th>Owner / recipients</th>
-      <th class="text-end">Vulns</th><th>Crit / High / Med / Low</th><th class="text-end">Past SLO</th>
-      <th>Last notified</th><th class="text-end">Actions</th>
+      <th class="text-end">Open</th><th>Crit / High / Med / Low</th><th class="text-end">Past SLO</th>
+      <th class="text-end">Remediated</th><th>Last notified</th><th class="text-end">Actions</th>
     </tr>
   </thead>
   <tbody>
@@ -98,9 +98,10 @@
           {% if not a.recipients() %}<span class="text-danger">No email set</span>{% endif %}
         {% endif %}
       </td>
-      <td class="text-end num fw-semibold">{{ "{:,}".format(r.counts.total) }}{% if r.all_total is not none and r.all_total != r.counts.total %}<div class="small text-muted fw-normal">of {{ "{:,}".format(r.all_total) }}</div>{% endif %}</td>
+      <td class="text-end num fw-semibold">{{ "{:,}".format(r.counts.total) }}{% if r.all_total is not none and r.all_total != r.counts.total %}<div class="small text-muted fw-normal">of {{ "{:,}".format(r.all_total) }}</div>{% endif %}{% if r.counts.not_seen %}<div class="small text-warning fw-normal" title="Open, but not rescanned in {{ not_seen_days }}+ days"><i class="bi bi-eye-slash"></i> {{ r.counts.not_seen }}</div>{% endif %}</td>
       <td>{{ sev_counts(r.counts) }}</td>
       <td class="text-end num {% if r.counts.overdue %}text-danger fw-semibold{% endif %}">{{ r.counts.overdue }}</td>
+      <td class="text-end num">{% if r.remediated %}<a class="text-success text-decoration-none" href="{{ url_for('app_detail', app_id=r.app_id, status='remediated') }}">{{ "{:,}".format(r.remediated) }}</a>{% else %}<span class="text-muted">0</span>{% endif %}</td>
       <td class="small text-muted">{{ r.last_notified|fmt_dt or '—' }}</td>
       <td class="text-end text-nowrap">
         {% if a %}
@@ -114,7 +115,7 @@
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="9" class="text-center text-muted py-4">{% if active %}No applications match these filters.{% else %}No applications found.{% endif %}</td></tr>
+    <tr><td colspan="10" class="text-center text-muted py-4">{% if active %}No applications match these filters.{% else %}No applications found.{% endif %}</td></tr>
   {% endfor %}
   </tbody>
 </table>

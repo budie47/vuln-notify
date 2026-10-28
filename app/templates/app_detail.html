@@ -15,7 +15,7 @@
     {% else %}
       <a class="btn btn-success" href="{{ url_for('app_new', app_id=app_id) }}"><i class="bi bi-person-plus"></i> Register owner</a>
     {% endif %}
-    {% if counts %}<a class="btn btn-outline-secondary" href="{{ url_for('app_export', app_id=app_id, **active) }}"
+    {% if counts or remediated %}<a class="btn btn-outline-secondary" href="{{ url_for('app_export', app_id=app_id, **active) }}"
          title="{{ 'Exports the filtered list' if active else 'Exports all vulnerabilities' }}"><i class="bi bi-download"></i> CSV{% if active %} (filtered){% endif %}</a>{% endif %}
   </div>
 </div>
@@ -41,9 +41,11 @@
   <div class="col-lg-3">
     <div class="card h-100"><div class="card-body">
       <h2 class="h6">Summary</h2>
-      <div class="kpi"><div class="value num">{{ counts.total if counts else 0 }}</div><div class="label">vulnerabilities</div></div>
+      <div class="kpi"><div class="value num">{{ counts.total if counts else 0 }}</div><div class="label">open vulnerabilities</div></div>
       {% if counts %}<div class="mt-2">{{ sev_counts(counts) }}</div>
-      <div class="mt-2 small {% if counts.overdue %}text-danger{% endif %}">{{ counts.overdue }} past SLO date</div>{% endif %}
+      <div class="mt-2 small {% if counts.overdue %}text-danger{% endif %}">{{ counts.overdue }} past SLO date</div>
+      {% if counts.not_seen %}<div class="mt-1 small"><a class="text-warning text-decoration-none" href="{{ url_for('app_detail', app_id=app_id, status='not_seen') }}"><i class="bi bi-eye-slash"></i> {{ counts.not_seen }} not rescanned in {{ not_seen_days }}+ days</a></div>{% endif %}{% endif %}
+      {% if remediated %}<div class="mt-1 small"><a class="text-success text-decoration-none" href="{{ url_for('app_detail', app_id=app_id, status='remediated') }}"><i class="bi bi-check2-circle"></i> {{ remediated }} remediated</a></div>{% endif %}
     </div></div>
   </div>
   <div class="col-lg-4">
@@ -66,6 +68,12 @@
       <input class="form-control form-control-sm" id="f-q" name="q" value="{{ filters.q }}" placeholder="CVE, package, image, asset, alert ID…">
     </div>
     <div class="col-6 col-md-2">
+      <label class="form-label small mb-0" for="f-status">Status</label>
+      <select class="form-select form-select-sm autosubmit" id="f-status" name="status">
+        {% for v, l in [('', 'Open'), ('not_seen', 'Not rescanned ' ~ not_seen_days ~ '+ days'), ('remediated', 'Remediated'), ('all', 'All')] %}<option value="{{ v }}" {% if filters.status == v %}selected{% endif %}>{{ l }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2 col-xl-1">
       <label class="form-label small mb-0" for="f-sev">Severity</label>
       <select class="form-select form-select-sm autosubmit" id="f-sev" name="severity">
         <option value="">All</option>
@@ -102,12 +110,26 @@
 <div class="table-responsive">
 <table class="table table-sm table-striped table-vulns mb-0">
   <thead class="table-light"><tr>
-    <th>Severity</th><th>CVE</th><th>Package</th><th>Current → Recommended</th><th>Asset / Image</th>
+    <th>Status</th><th>Severity</th><th>CVE</th><th>Package</th><th>Current → Recommended</th><th>Asset / Image</th>
     <th>Environment</th><th class="text-end">Days open</th><th>SLO date</th><th>Exception</th><th>Alert ID</th>
   </tr></thead>
   <tbody>
   {% for v in vulns %}
     <tr>
+      <td class="text-nowrap small">
+        {% if v.status == 'remediated' %}
+          <span class="badge text-bg-success">Remediated</span>
+          <div class="text-muted">{{ v.remediated_at|fmt_dt('%Y-%m-%d') }}{% if v.remediated_run_id %} · <a href="{{ url_for('run_detail', run_id=v.remediated_run_id) }}">#{{ v.remediated_run_id }}</a>{% endif %}</div>
+        {% else %}
+          {% set seen = v.last_scan or v.last_seen_at %}
+          {% if seen and (today - seen.date()).days >= not_seen_days %}
+            <span class="badge text-bg-warning" title="No newer scan of this asset for {{ not_seen_days }}+ days — check whether the image is retired or the scan is failing">Not seen {{ (today - seen.date()).days }}d</span>
+          {% else %}
+            <span class="badge text-bg-light border">Open</span>
+          {% endif %}
+          {% if v.reopened_at %}<div class="text-warning" title="Was remediated, then found again in a newer scan">Reopened {{ v.reopened_at|fmt_dt('%Y-%m-%d') }}</div>{% endif %}
+        {% endif %}
+      </td>
       <td>{{ sev_badge(v.severity) }}</td>
       <td class="text-nowrap">{% if v.cve_link %}<a href="{{ v.cve_link }}" target="_blank" rel="noopener">{{ v.cve_id }}</a>{% else %}{{ v.cve_id or '' }}{% endif %}
         {% if v.cve_description %}<i class="bi bi-info-circle text-muted" title="{{ v.cve_description }}"></i>{% endif %}</td>
@@ -121,13 +143,13 @@
       <td class="small text-muted">{{ v.alert_id }}</td>
     </tr>
   {% else %}
-    <tr><td colspan="10" class="text-center text-muted py-4">{% if active %}No vulnerabilities match these filters.{% else %}No vulnerabilities for this App ID.{% endif %}</td></tr>
+    <tr><td colspan="11" class="text-center text-muted py-4">{% if active %}No vulnerabilities match these filters.{% else %}No vulnerabilities for this App ID.{% endif %}</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
 </div>
-{{ pager(pg, 'app_detail', {'app_id': app_id}, active, 'vfilter', counts.total if counts else 0) }}
+{{ pager(pg, 'app_detail', {'app_id': app_id}, active, 'vfilter', unfiltered) }}
 </div>
 {% endblock %}
 {% block scripts %}{{ autosubmit_script() }}{% endblock %}

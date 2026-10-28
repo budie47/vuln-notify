@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% from "_macros.html" import sev_badge %}
+{% block title %}Import #{{ run.id }} · Vuln Notify{% endblock %}
+{% block content %}
+<a href="{{ url_for('upload') }}" class="small text-decoration-none"><i class="bi bi-arrow-left"></i> Upload Data</a>
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+  <h1 class="h3 mb-0">Import #{{ run.id }}
+    <span class="badge fs-6 text-bg-{{ {'draft': 'warning', 'finalized': 'success'}.get(run.status, 'secondary') }}">{{ run.status }}</span></h1>
+  <small class="text-muted">Started {{ run.created_at|fmt_dt }} UTC{% if run.finalized_at %} · finalized {{ run.finalized_at|fmt_dt }} UTC{% endif %}</small>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card h-100"><div class="card-body p-0">
+      <h2 class="h6 px-3 pt-3">Files</h2>
+      <table class="table table-sm mb-0">
+        <thead class="table-light"><tr><th>File</th><th>Uploaded (UTC)</th><th class="text-end">Read</th><th class="text-end">Accepted</th><th class="text-end">Rejected</th><th>Errors</th></tr></thead>
+        <tbody>
+        {% for f in files %}
+          <tr><td>{{ f.filename }}</td><td class="text-nowrap">{{ f.uploaded_at|fmt_dt }}</td>
+            <td class="text-end num">{{ f.rows_read }}</td><td class="text-end num">{{ f.rows_loaded }}</td>
+            <td class="text-end num {% if f.rows_rejected %}text-danger{% endif %}">{{ f.rows_rejected }}</td>
+            <td class="small">{% if f.errors %}<details><summary>show</summary><pre class="mb-0">{{ f.errors }}</pre></details>{% endif %}</td></tr>
+        {% else %}<tr><td colspan="6" class="text-muted text-center py-3">No files.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+      {% if run.status == 'draft' %}
+      <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" class="d-flex flex-wrap gap-2 p-3 border-top"
+            onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='Uploading…';">
+        <input class="form-control form-control-sm w-auto flex-grow-1" type="file" name="file" accept="{{ accept }}" required>
+        <button class="btn btn-sm btn-outline-primary"><i class="bi bi-plus-lg"></i> Add another batch</button>
+      </form>
+      {% endif %}
+    </div></div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card h-100"><div class="card-body">
+      {% if run.status == 'draft' %}
+        {% set c = preview.counts %}
+        <h2 class="h6">What finalizing will do</h2>
+        <table class="table table-sm mb-3">
+          <tr><td>New vulnerabilities</td><td class="text-end num fw-semibold">{{ "{:,}".format(c.new) }}</td></tr>
+          <tr><td>Still open (updated)</td><td class="text-end num">{{ "{:,}".format(c.updated) }}</td></tr>
+          <tr><td>Reopened <small class="text-muted">— remediated, found in a newer scan</small></td><td class="text-end num {% if c.reopened %}text-warning fw-semibold{% endif %}">{{ "{:,}".format(c.reopened) }}</td></tr>
+          <tr><td>Marked remediated <small class="text-muted">— missing from a newer scan of their asset</small></td><td class="text-end num {% if c.remediated %}text-success fw-semibold{% endif %}">{{ "{:,}".format(c.remediated) }}</td></tr>
+          <tr><td>Skipped <small class="text-muted">— older than what is stored</small></td><td class="text-end num text-muted">{{ "{:,}".format(c.skipped) }}</td></tr>
+          <tr class="table-light"><td>Assets in this import</td><td class="text-end num">{{ "{:,}".format(c.assets) }}</td></tr>
+        </table>
+        <div class="d-flex gap-2 flex-wrap">
+          <form method="post" action="{{ url_for('run_finalize', run_id=run.id) }}"
+                onsubmit="return confirm('Apply import #{{ run.id }}? {{ c.new }} new, {{ c.remediated }} will be marked remediated.');">
+            <button class="btn btn-success" {% if not c.staged %}disabled{% endif %}><i class="bi bi-check2-all"></i> Finalize import</button>
+          </form>
+          <form method="post" action="{{ url_for('run_discard', run_id=run.id) }}"
+                onsubmit="return confirm('Discard import #{{ run.id }} and all its files? Live data is not affected.');">
+            <button class="btn btn-outline-danger"><i class="bi bi-trash"></i> Discard</button>
+          </form>
+        </div>
+        <p class="small text-muted mt-2 mb-0">Waiting for more batches? Leave it as a draft — nothing is applied until you finalize.</p>
+      {% elif run.status == 'finalized' %}
+        <h2 class="h6">Result</h2>
+        <table class="table table-sm mb-0">
+          <tr><td>New</td><td class="text-end num">{{ run.rows_new }}</td></tr>
+          <tr><td>Still open (updated)</td><td class="text-end num">{{ run.rows_updated }}</td></tr>
+          <tr><td>Reopened</td><td class="text-end num">{{ run.rows_reopened }}</td></tr>
+          <tr><td>Marked remediated</td><td class="text-end num text-success fw-semibold">{{ run.rows_remediated }}</td></tr>
+          <tr><td>Skipped (older)</td><td class="text-end num text-muted">{{ run.rows_skipped }}</td></tr>
+          <tr class="table-light"><td>Assets in this import</td><td class="text-end num">{{ run.assets_scanned }}</td></tr>
+        </table>
+      {% else %}
+        <p class="text-muted mb-0">This import was discarded. No data was changed.</p>
+      {% endif %}
+    </div></div>
+  </div>
+
+  {% set rem_rows = preview.remediate_sample if preview else remediated %}
+  {% if rem_rows %}
+  <div class="col-12">
+    <div class="card"><div class="card-body p-0">
+      <h2 class="h6 px-3 pt-3">{{ 'Will be marked remediated' if preview else 'Marked remediated by this import' }}
+        {% if preview and preview.remediate_by_app %}<small class="text-muted fw-normal">—
+          {% for app_id, n in preview.remediate_by_app %}{{ app_id or '(blank)' }}: {{ n }}{{ ', ' if not loop.last }}{% endfor %}</small>{% endif %}</h2>
+      <div class="table-responsive">
+      <table class="table table-sm table-striped table-vulns mb-0">
+        <thead class="table-light"><tr><th>App ID</th><th>Severity</th><th>CVE</th><th>Package</th><th>Asset / Image</th><th>Last seen in scan</th>{% if preview %}<th>Newer scan</th>{% endif %}</tr></thead>
+        <tbody>
+        {% for v in rem_rows %}
+          <tr><td>{{ v.app_id }}</td><td>{{ sev_badge(v.severity) }}</td><td>{{ v.cve_id }}</td><td>{{ v.package or '' }}</td>
+            <td class="text-truncate-300" title="{{ v.asset_id }}">{% if v.image %}{{ v.image }}{% if v.image_tag %}:{{ v.image_tag }}{% endif %}{% else %}{{ v.asset_id }}{% endif %}</td>
+            <td class="text-nowrap">{{ (v.last_seen_scan if preview else v.last_scan)|fmt_dt('%Y-%m-%d') }}</td>
+            {% if preview %}<td class="text-nowrap">{{ v.new_scan|fmt_dt('%Y-%m-%d') }}</td>{% endif %}</tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% set total_rem = preview.counts.remediated if preview else run.rows_remediated %}
+      {% if total_rem > rem_rows|length %}<p class="small text-muted px-3 py-2 mb-0">Showing the first {{ rem_rows|length }} of {{ total_rem }}.</p>{% endif %}
+    </div></div>
+  </div>
+  {% endif %}
+
+  {% if preview and preview.reopen_sample %}
+  <div class="col-12">
+    <div class="card"><div class="card-body p-0">
+      <h2 class="h6 px-3 pt-3">Will be reopened</h2>
+      <table class="table table-sm mb-0">
+        <thead class="table-light"><tr><th>App ID</th><th>Severity</th><th>CVE</th><th>Asset</th><th>Remediated on</th><th>Found again in scan</th></tr></thead>
+        <tbody>{% for v in preview.reopen_sample %}<tr><td>{{ v.app_id }}</td><td>{{ sev_badge(v.severity) }}</td><td>{{ v.cve_id }}</td><td>{{ v.asset_id }}</td>
+          <td>{{ v.remediated_at|fmt_dt('%Y-%m-%d') }}</td><td>{{ v.new_scan|fmt_dt('%Y-%m-%d') }}</td></tr>{% endfor %}</tbody>
+      </table>
+    </div></div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
