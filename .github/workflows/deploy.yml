@@ -20,6 +20,18 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: vulnnotify
+          POSTGRES_USER: vulnnotify
+          POSTGRES_PASSWORD: vulnnotify
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vulnnotify" --health-interval 3s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg2://vulnnotify:vulnnotify@localhost:5432/vulnnotify
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,15 +39,18 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Compile and load templates
+      - name: Start the app and load every page
         run: |
           python -m compileall -q app
           python - <<'PY'
-          from jinja2 import Environment, FileSystemLoader
-          env = Environment(loader=FileSystemLoader("app/templates"))
-          for name in env.list_templates():
-              env.get_template(name)
-          print("templates ok:", len(env.list_templates()))
+          from app.main import app
+          c = app.test_client()
+          assert c.get("/healthz").get_json()["status"] == "ok"
+          for path in ["/", "/apps", "/apps?show=registered&per_page=10", "/upload", "/notifications",
+                       "/apps/new", "/upload/template.csv", "/upload/template.xlsx"]:
+              r = c.get(path)
+              assert r.status_code == 200, f"{path} -> {r.status_code}"
+              print("ok", path)
           PY
 
   deploy:
