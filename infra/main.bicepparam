@@ -13,10 +13,12 @@ param maxReplicas = 2
 param containerImage = readEnvironmentVariable('CONTAINER_IMAGE', '')
 
 param postgresAdminPassword = readEnvironmentVariable('PG_ADMIN_PASSWORD')
+param flaskSecretKey = readEnvironmentVariable('FLASK_SECRET_KEY')
 
 // Sign-in (Entra ID). Leave unset to deploy without sign-in.
 param authClientId = readEnvironmentVariable('AUTH_CLIENT_ID', '')
 param authClientSecret = readEnvironmentVariable('AUTH_CLIENT_SECRET', '')
+param requiredGroupId = readEnvironmentVariable('REQUIRED_GROUP_ID', '')
 
 // Email. With Communication Services: SMTP_USER is "<acs name>.<smtp app client id>.<tenant id>"
 // and SMTP_PASSWORD is that app's client secret. Or point SMTP_HOST at your own relay.

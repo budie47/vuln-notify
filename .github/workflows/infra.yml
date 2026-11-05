@@ -21,6 +21,8 @@ jobs:
       RG: ${{ vars.AZURE_RESOURCE_GROUP }}
       # Read by infra/main.bicepparam
       PG_ADMIN_PASSWORD: ${{ secrets.PG_ADMIN_PASSWORD }}
+      FLASK_SECRET_KEY: ${{ secrets.FLASK_SECRET_KEY }}
+      REQUIRED_GROUP_ID: ${{ vars.REQUIRED_GROUP_ID }}
       AUTH_CLIENT_ID: ${{ vars.AUTH_CLIENT_ID }}
       AUTH_CLIENT_SECRET: ${{ secrets.AUTH_CLIENT_SECRET }}
       SMTP_HOST: ${{ vars.SMTP_HOST }}
@@ -35,6 +37,7 @@ jobs:
         run: |
           [ -n "$RG" ] || { echo "::error::Set the repository variable AZURE_RESOURCE_GROUP"; exit 1; }
           [ -n "$PG_ADMIN_PASSWORD" ] || { echo "::error::Set the secret PG_ADMIN_PASSWORD"; exit 1; }
+          [ -n "$FLASK_SECRET_KEY" ] || { echo "::error::Set the secret FLASK_SECRET_KEY"; exit 1; }
 
       - uses: azure/login@v2
         with:

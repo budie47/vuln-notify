@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Access denied · Vuln Notify{% endblock %}
+{% block content %}
+<div class="card mx-auto mt-5" style="max-width: 560px"><div class="card-body p-4 text-center">
+  <i class="bi bi-shield-lock text-danger" style="font-size: 3rem"></i>
+  <h1 class="h4 mt-2">Access denied</h1>
+  <p class="mb-2">{% if user %}You are signed in as <strong>{{ user }}</strong>, but{% else %}Your account{% endif %}
+    you are not a member of the <strong>{{ group }}</strong> group that is allowed to use Vuln Notify.</p>
+  <p class="text-muted small mb-3">Ask an administrator to add you to the group, then sign out and sign in again
+    (group changes apply at the next sign-in).</p>
+  <a class="btn btn-outline-secondary btn-sm" href="/.auth/logout">Sign out</a>
+</div></div>
+{% endblock %}

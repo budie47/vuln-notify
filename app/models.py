@@ -183,6 +183,16 @@ class UploadLog(Base):
     errors = Column(Text)
 
 
+class Setting(Base):
+    """Key/value settings changed from the Settings page; they override environment defaults."""
+    __tablename__ = "settings"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(Text)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by = Column(String(256))
+
+
 class NotificationLog(Base):
     __tablename__ = "notification_logs"
 

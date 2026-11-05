@@ -39,9 +39,10 @@ param postgresBackupRetentionDays int = 7
 @description('Open alerts with no newer scan of their asset for this many days are flagged "Not seen".')
 param notSeenDays int = 90
 
-@description('Flask secret key (signs flash messages). Generated per deployment if not supplied.')
+@description('Flask secret key. Signs session data and encrypts the SMTP password saved on the Settings page, so keep it the same across deployments.')
 @secure()
-param flaskSecretKey string = newGuid()
+@minLength(32)
+param flaskSecretKey string
 
 @minValue(0)
 param minReplicas int = 1
@@ -72,6 +73,12 @@ param mailFrom string = ''
 param smtpAppPrincipalId string = ''
 
 // ---- sign-in (Entra ID via Container Apps authentication)
+@description('Object ID of the Entra security group whose members may use the app. Requires sign-in (authClientId) and the app registration to emit group claims. Empty = any signed-in user of the tenant.')
+param requiredGroupId string = ''
+
+@description('Display name of that group, shown on the access-denied page.')
+param requiredGroupName string = 'vn_admin'
+
 @description('Client (application) ID of the Entra app registration for user sign-in. Leave empty to deploy without sign-in (NOT recommended: the app has no login of its own).')
 param authClientId string = ''
 
@@ -394,7 +401,9 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (!empty(containerImag
             { name: 'NOT_SEEN_DAYS', value: string(notSeenDays) }
             { name: 'SMTP_HOST', value: effectiveSmtpHost }
             { name: 'SMTP_PORT', value: string(smtpPort) }
-            { name: 'SMTP_USE_TLS', value: 'true' }
+            { name: 'SMTP_SECURITY', value: 'starttls' }
+            { name: 'REQUIRED_GROUP_ID', value: requiredGroupId }
+            { name: 'REQUIRED_GROUP_NAME', value: requiredGroupName }
             { name: 'SMTP_USER', value: smtpUser }
             { name: 'SMTP_PASSWORD', secretRef: 'smtp-password' }
             { name: 'MAIL_FROM', value: effectiveMailFrom }

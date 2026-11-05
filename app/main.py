@@ -1,4 +1,6 @@
+import base64
 import io
+import json
 import os
 from datetime import date, datetime, timedelta
 
@@ -8,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from . import importer, mailer
 from .models import (
-    NOT_SEEN_DAYS, VULN_FIELDS, Application, ImportRun, NotificationLog, SessionLocal,
+    NOT_SEEN_DAYS, VULN_FIELDS, Application, ImportRun, NotificationLog, SessionLocal, Setting,
     StagedVulnerability, UploadLog, Vulnerability, engine, init_db,
 )
 
@@ -68,6 +70,35 @@ def inject_globals():
     # Set by Azure Container Apps authentication (Entra ID) when sign-in is enabled.
     user = request.headers.get("X-MS-CLIENT-PRINCIPAL-NAME")
     return {"draft_run": draft, "not_seen_days": NOT_SEEN_DAYS, "current_user": user}
+
+
+# Access control. When REQUIRED_GROUP_ID is set (Azure), the user signed in through Container Apps
+# authentication must be a member of that Entra security group. The app registration emits a
+# "groups" claim, which the platform passes on in the X-MS-CLIENT-PRINCIPAL header.
+REQUIRED_GROUP_ID = os.environ.get("REQUIRED_GROUP_ID", "").strip()
+REQUIRED_GROUP_NAME = os.environ.get("REQUIRED_GROUP_NAME", "").strip() or REQUIRED_GROUP_ID
+
+
+def principal_groups():
+    raw = request.headers.get("X-MS-CLIENT-PRINCIPAL")
+    if not raw:
+        return None
+    try:
+        claims = json.loads(base64.b64decode(raw + "=" * (-len(raw) % 4)))["claims"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return {c.get("val") for c in claims if c.get("typ") == "groups"}
+
+
+@app.before_request
+def require_group():
+    if not REQUIRED_GROUP_ID or request.endpoint in ("healthz", "static"):
+        return None
+    groups = principal_groups()
+    if groups is None or REQUIRED_GROUP_ID not in groups:
+        return render_template("access_denied.html", group=REQUIRED_GROUP_NAME,
+                               user=request.headers.get("X-MS-CLIENT-PRINCIPAL-NAME")), 403
+    return None
 
 
 @app.route("/healthz")
@@ -446,7 +477,7 @@ def notify_app(app_id):
     counts = severity_summary(Vulnerability.app_id == app_id).get(app_id)
     log = NotificationLog(app_id=app_id, vuln_count=len(vulns), recipients=", ".join(a.recipients()))
     try:
-        mailer.send_app_notification(a, vulns, counts)
+        mailer.send_app_notification(SessionLocal, a, vulns, counts)
         log.status = "sent"
         msg = f"{app_id}: email sent to {log.recipients} ({len(vulns)} vulnerabilities)."
     except Exception as e:  # noqa: BLE001 — record any SMTP/config failure in the log
@@ -483,6 +514,45 @@ def apps_notify_bulk():
 def notifications():
     logs = SessionLocal.scalars(select(NotificationLog).order_by(NotificationLog.sent_at.desc()).limit(500)).all()
     return render_template("notifications.html", logs=logs)
+
+
+# ---------------------------------------------------------------- settings
+
+@app.route("/settings", methods=["GET", "POST"])
+def settings():
+    s = SessionLocal
+    user = request.headers.get("X-MS-CLIENT-PRINCIPAL-NAME")
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "save":
+            values = {k: request.form.get(k, "") for k in mailer.SMTP_KEYS}
+            if values["smtp_security"] not in mailer.SECURITY_CHOICES:
+                flash("Choose a valid security option.", "danger")
+                return redirect(url_for("settings"))
+            if not values["smtp_port"].isdigit():
+                flash("Port must be a number.", "danger")
+                return redirect(url_for("settings"))
+            mailer.save_smtp_config(s, values, user=user, keep_password=not request.form.get("clear_password"))
+            flash("Email settings saved. Use 'Send test email' to check them.", "success")
+        elif action == "reset":
+            mailer.reset_smtp_config(s)
+            flash("Saved email settings removed — using the deployment defaults again.", "success")
+        elif action == "test":
+            to = (request.form.get("test_to") or "").strip()
+            if not to:
+                flash("Enter an address to send the test email to.", "warning")
+            else:
+                try:
+                    mailer.send_test_email(s, to)
+                    flash(f"Test email sent to {to}.", "success")
+                except Exception as e:  # noqa: BLE001 — show any SMTP / network error
+                    flash(f"Test email failed: {e}", "danger")
+        return redirect(url_for("settings"))
+    cfg = mailer.smtp_config(s)
+    meta = {r.key: r for r in s.scalars(select(Setting).where(Setting.key.in_(mailer.SMTP_KEYS)))}
+    last_saved = max(meta.values(), key=lambda r: r.updated_at) if meta else None
+    return render_template("settings.html", cfg=cfg, defaults=mailer.ENV_DEFAULTS, last_saved=last_saved,
+                           security_choices=mailer.SECURITY_CHOICES, user=user)
 
 
 # ---------------------------------------------------------------- upload

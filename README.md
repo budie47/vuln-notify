@@ -37,6 +37,7 @@ export DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/vulnnotify SM
 | **App detail** `/apps/<id>` | Owner + recipients, the full vulnerability list, CSV export, notification history |
 | **Upload Data** `/upload` | Accepts `.csv` and `.xlsx`/`.xlsm` (first worksheet; old `.xls` must be re-saved as `.xlsx`). Files go into a draft **import**; see *Imports and remediation* below |
 | **Import** `/runs/<id>` | Files in the import, a preview of what finalizing will change (new / updated / reopened / remediated / skipped, with the list), **Finalize** or **Discard** |
+| **Settings** `/settings` | Change the SMTP server (host, port, STARTTLS/SSL/none, login, sender) and send a test email. Saved values override the environment defaults; the password is stored encrypted with `SECRET_KEY` |
 | **Notification log** `/notifications` | Every send attempt with recipients and status/error |
 
 ## Imports and remediation

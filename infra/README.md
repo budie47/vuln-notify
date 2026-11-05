@@ -13,6 +13,7 @@
 | Log Analytics workspace | App and platform logs (30 days) |
 | Communication Services + Email (Azure-managed domain) | Sends notification emails |
 | Container Apps authentication (Entra ID) | Company sign-in in front of the whole app (optional, strongly recommended) |
+| `vn_admin` security group (created by the setup steps) | Only members can use the app — checked by the app from the sign-in's group claim (works on Entra ID Free) |
 
 Two GitHub Actions workflows deploy it:
 
@@ -71,8 +72,19 @@ AUTH_SECRET=$(az ad app credential reset --id $AUTH_APP --display-name container
 echo "AUTH_CLIENT_ID=$AUTH_APP"   # AUTH_SECRET goes into a GitHub secret
 ```
 
-To limit who can sign in: Entra admin center → Enterprise applications → *Vuln Notify* → Properties →
-*Assignment required* = Yes, then add users/groups under *Users and groups*.
+Only members of a security group may use the app. Entra ID Free cannot restrict an app to a group,
+so the app registration emits group claims and the app checks them (users outside the group see
+*Access denied*):
+
+```bash
+GROUP_ID=$(az ad group create --display-name vn_admin --mail-nickname vn_admin \
+  --description "Users allowed to use Vuln Notify" --query id -o tsv)
+az ad app update --id $AUTH_APP --set groupMembershipClaims=SecurityGroup
+az ad group member add --group vn_admin --member-id $(az ad signed-in-user show --query id -o tsv)
+```
+
+Add or remove people with Entra admin center → Groups → *vn_admin* → Members. Changes apply at their
+next sign-in.
 
 ### 4. GitHub settings
 
@@ -84,9 +96,11 @@ gh secret set AZURE_CLIENT_ID     --env production --body "$CI_APP"
 gh secret set AZURE_TENANT_ID     --env production --body "$TENANT"
 gh secret set AZURE_SUBSCRIPTION_ID --env production --body "$SUB"
 gh secret set PG_ADMIN_PASSWORD   --env production --body "<long random password>"
+gh secret set FLASK_SECRET_KEY    --env production --body "$(openssl rand -hex 32)"   # keep it: encrypts saved SMTP password
 gh secret set AUTH_CLIENT_SECRET  --env production --body "$AUTH_SECRET"
 gh variable set AZURE_RESOURCE_GROUP --body rg-vuln-notify
 gh variable set AUTH_CLIENT_ID       --body "$AUTH_APP"
+gh variable set REQUIRED_GROUP_ID    --body "$GROUP_ID"
 ```
 
 `PG_ADMIN_PASSWORD`: 8–128 characters with three of upper case, lower case, digits and symbols. Keep
@@ -124,8 +138,9 @@ gh secret set SMTP_PASSWORD --env production --body "$SMTP_SECRET"
 Run **Provision infrastructure** again. It grants that app access to Communication Services and
 gives the app the SMTP settings. Then use *Send notification* on an app to test.
 
-Using your company's SMTP relay instead: set `SMTP_HOST`, `SMTP_USER`, `MAIL_FROM` (variables) and
-`SMTP_PASSWORD` (secret), and set `deployCommunicationServices = false` in `infra/main.bicepparam`.
+Switching to your company's SMTP relay later: open **Settings** in the app, enter the relay's
+server, port, security, login and sender, *Save*, then *Send test email*. No redeployment needed;
+saved settings take precedence over the deployment defaults.
 
 ## Day to day
 
@@ -139,4 +154,4 @@ Using your company's SMTP relay instead: set `SMTP_HOST`, `SMTP_USER`, `MAIL_FRO
 
 - Container Apps ends a web request after ~4 minutes. Finalizing an import of a few thousand rows takes seconds; tens of thousands could get close. If exports grow that large, move Finalize into a background job.
 - Rough cost at the default sizes: PostgreSQL B1ms ≈ US$15–30/month, Container App ≈ US$5–20, Container Registry Basic ≈ US$5, Log Analytics a few dollars, email cents per thousand. Check the Azure pricing calculator for your region.
-- Re-running *Provision infrastructure* rotates the Flask secret key (signed-in users only lose pending flash messages).
+- Keep `FLASK_SECRET_KEY` unchanged: it encrypts the SMTP password saved on the Settings page. If it changes, the page asks for the password again.

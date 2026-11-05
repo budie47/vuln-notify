@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Settings · Vuln Notify{% endblock %}
+{% block content %}
+<h1 class="h3 mb-3">Settings</h1>
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card"><div class="card-body">
+      <h2 class="h6">Email (SMTP server)</h2>
+      <p class="small text-muted">Used for notification emails. Saved values override the deployment defaults
+        {% if last_saved %}— last saved {{ last_saved.updated_at|fmt_dt }} UTC{% if last_saved.updated_by %} by {{ last_saved.updated_by }}{% endif %}{% endif %}.</p>
+      {% if cfg.password_error %}<div class="alert alert-warning py-2 small">The saved password can no longer be read (the app's secret key changed). Enter it again.</div>{% endif %}
+      <form method="post" autocomplete="off">
+        <input type="hidden" name="action" value="save">
+        <div class="row g-3">
+          <div class="col-md-8"><label class="form-label" for="smtp_host">Server</label>
+            <input class="form-control" id="smtp_host" name="smtp_host" value="{{ cfg.smtp_host }}" required placeholder="smtp.company.com"></div>
+          <div class="col-md-4"><label class="form-label" for="smtp_port">Port</label>
+            <input class="form-control" id="smtp_port" name="smtp_port" value="{{ cfg.smtp_port }}" required inputmode="numeric"></div>
+          <div class="col-md-6"><label class="form-label" for="smtp_security">Security</label>
+            <select class="form-select" id="smtp_security" name="smtp_security">
+              {% for v, l in [('starttls', 'STARTTLS (usually port 587)'), ('ssl', 'SSL/TLS (usually port 465)'), ('none', 'None (usually port 25)')] %}
+                <option value="{{ v }}" {% if cfg.smtp_security == v %}selected{% endif %}>{{ l }}</option>
+              {% endfor %}
+            </select></div>
+          <div class="col-md-6"><label class="form-label" for="mail_from">Sender address</label>
+            <input class="form-control" id="mail_from" name="mail_from" type="email" value="{{ cfg.mail_from }}" required></div>
+          <div class="col-md-6"><label class="form-label" for="smtp_user">Username</label>
+            <input class="form-control" id="smtp_user" name="smtp_user" value="{{ cfg.smtp_user }}" placeholder="leave empty if the relay needs no login"></div>
+          <div class="col-md-6"><label class="form-label" for="smtp_password">Password</label>
+            <input class="form-control" id="smtp_password" name="smtp_password" type="password" autocomplete="new-password"
+                   placeholder="{{ '•••••••• (unchanged if left empty)' if cfg.smtp_password else 'not set' }}">
+            {% if cfg.source.smtp_password == 'saved' and cfg.smtp_password %}
+            <div class="form-check mt-1"><input class="form-check-input" type="checkbox" name="clear_password" value="1" id="clear_password">
+              <label class="form-check-label small" for="clear_password">Remove saved password</label></div>{% endif %}
+          </div>
+        </div>
+        <div class="d-flex flex-wrap gap-2 mt-3">
+          <button class="btn btn-primary"><i class="bi bi-check-lg"></i> Save</button>
+        </div>
+      </form>
+      {% if 'saved' in cfg.source.values() %}
+      <form method="post" class="mt-2" onsubmit="return confirm('Remove the saved email settings and go back to the deployment defaults?');">
+        <input type="hidden" name="action" value="reset">
+        <button class="btn btn-link btn-sm px-0 text-danger">Reset to deployment defaults</button>
+      </form>
+      {% endif %}
+    </div></div>
+  </div>
+  <div class="col-lg-5">
+    <div class="card mb-3"><div class="card-body">
+      <h2 class="h6">Send test email</h2>
+      <form method="post" class="d-flex gap-2">
+        <input type="hidden" name="action" value="test">
+        <input class="form-control" type="email" name="test_to" placeholder="you@company.com" value="{{ user if user and '@' in user else '' }}" required>
+        <button class="btn btn-outline-primary text-nowrap"><i class="bi bi-send"></i> Send</button>
+      </form>
+      <p class="small text-muted mt-2 mb-0">Uses the settings currently saved on the left.</p>
+    </div></div>
+    <div class="card"><div class="card-body small">
+      <h2 class="h6">Deployment defaults</h2>
+      <table class="table table-sm mb-0">
+        <tr><td class="text-muted">Server</td><td>{{ defaults.smtp_host }}:{{ defaults.smtp_port }} ({{ defaults.smtp_security }})</td>
+          <td>{% if cfg.source.smtp_host == 'default' %}<span class="badge text-bg-light border">in use</span>{% endif %}</td></tr>
+        <tr><td class="text-muted">Sender</td><td>{{ defaults.mail_from }}</td>
+          <td>{% if cfg.source.mail_from == 'default' %}<span class="badge text-bg-light border">in use</span>{% endif %}</td></tr>
+        <tr><td class="text-muted">Username</td><td>{{ defaults.smtp_user or '—' }}</td><td></td></tr>
+      </table>
+      <p class="text-muted mt-2 mb-0">Defaults come from the deployment (environment variables). Values saved here take precedence and survive redeployments.</p>
+    </div></div>
+  </div>
+</div>
+{% endblock %}
