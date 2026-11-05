@@ -1,0 +1,86 @@
+# Build the app image in Azure Container Registry and roll it out to the Container App.
+# Runs on pushes to main that touch the app. Skipped until the repository variable
+# AZURE_RESOURCE_GROUP is set (see infra/README.md).
+name: Deploy app
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**", "requirements.txt", "Dockerfile", ".dockerignore", ".github/workflows/deploy.yml"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # OIDC login to Azure
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile and load templates
+        run: |
+          python -m compileall -q app
+          python - <<'PY'
+          from jinja2 import Environment, FileSystemLoader
+          env = Environment(loader=FileSystemLoader("app/templates"))
+          for name in env.list_templates():
+              env.get_template(name)
+          print("templates ok:", len(env.list_templates()))
+          PY
+
+  deploy:
+    needs: check
+    if: vars.AZURE_RESOURCE_GROUP != ''
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Find registry and app
+        id: names
+        run: |
+          rg="${{ vars.AZURE_RESOURCE_GROUP }}"
+          acr=$(az acr list -g "$rg" --query "[0].name" -o tsv)
+          app=$(az containerapp list -g "$rg" --query "[0].name" -o tsv)
+          if [ -z "$acr" ] || [ -z "$app" ]; then
+            echo "::error::Registry or Container App not found in $rg — run the 'Provision infrastructure' workflow first."
+            exit 1
+          fi
+          echo "acr=$acr" >> "$GITHUB_OUTPUT"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+
+      - name: Build image in ACR
+        run: az acr build -r "${{ steps.names.outputs.acr }}" -t "vuln-notify:${GITHUB_SHA}" -t vuln-notify:latest .
+
+      - name: Roll out
+        run: |
+          az containerapp update -g "${{ vars.AZURE_RESOURCE_GROUP }}" -n "${{ steps.names.outputs.app }}" \
+            --image "${{ steps.names.outputs.acr }}.azurecr.io/vuln-notify:${GITHUB_SHA}"
+
+      - name: Smoke test
+        run: |
+          fqdn=$(az containerapp show -g "${{ vars.AZURE_RESOURCE_GROUP }}" -n "${{ steps.names.outputs.app }}" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          # With sign-in enabled, unauthenticated requests are redirected (302) to the login page.
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "https://$fqdn/") || true
+            case "$code" in 200|302|401) echo "https://$fqdn/ -> $code"; exit 0;; esac
+            sleep 10
+          done
+          echo "::error::App did not respond (last status $code)"; exit 1

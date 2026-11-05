@@ -1,0 +1,71 @@
+# Create or update the Azure resources from infra/main.bicep, then deploy the current code.
+# Run manually (Actions -> Provision infrastructure -> Run workflow). Safe to re-run.
+name: Provision infrastructure
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+      # Read by infra/main.bicepparam
+      PG_ADMIN_PASSWORD: ${{ secrets.PG_ADMIN_PASSWORD }}
+      AUTH_CLIENT_ID: ${{ vars.AUTH_CLIENT_ID }}
+      AUTH_CLIENT_SECRET: ${{ secrets.AUTH_CLIENT_SECRET }}
+      SMTP_HOST: ${{ vars.SMTP_HOST }}
+      SMTP_USER: ${{ vars.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      SMTP_APP_PRINCIPAL_ID: ${{ vars.SMTP_APP_PRINCIPAL_ID }}
+      MAIL_FROM: ${{ vars.MAIL_FROM }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check configuration
+        run: |
+          [ -n "$RG" ] || { echo "::error::Set the repository variable AZURE_RESOURCE_GROUP"; exit 1; }
+          [ -n "$PG_ADMIN_PASSWORD" ] || { echo "::error::Set the secret PG_ADMIN_PASSWORD"; exit 1; }
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # 1) Everything except the Container App (on the first run the registry is still empty).
+      #    Incremental mode: an existing Container App is left as it is.
+      - name: Deploy base infrastructure
+        id: base
+        env:
+          CONTAINER_IMAGE: ""
+        run: |
+          az deployment group create -g "$RG" -n "vuln-notify-base-${GITHUB_RUN_NUMBER}" \
+            -f infra/main.bicep -p infra/main.bicepparam -o none
+          acr=$(az deployment group show -g "$RG" -n "vuln-notify-base-${GITHUB_RUN_NUMBER}" \
+            --query properties.outputs.acrName.value -o tsv)
+          echo "acr=$acr" >> "$GITHUB_OUTPUT"
+
+      # 2) Build the current code into the registry.
+      - name: Build image in ACR
+        run: az acr build -r "${{ steps.base.outputs.acr }}" -t "vuln-notify:${GITHUB_SHA}" -t vuln-notify:latest .
+
+      # 3) Full deployment including the Container App and sign-in.
+      - name: Deploy app
+        env:
+          CONTAINER_IMAGE: ${{ steps.base.outputs.acr }}.azurecr.io/vuln-notify:${{ github.sha }}
+        run: |
+          az deployment group create -g "$RG" -n "vuln-notify-app-${GITHUB_RUN_NUMBER}" \
+            -f infra/main.bicep -p infra/main.bicepparam -o none
+          az deployment group show -g "$RG" -n "vuln-notify-app-${GITHUB_RUN_NUMBER}" \
+            --query "properties.outputs.{appUrl: appUrl.value, signInRedirectUri: authRedirectUri.value, mailFrom: mailFrom.value, smtpUsernameHint: smtpUsernameHint.value, postgres: postgresServer.value, keyVault: keyVaultName.value}" -o yaml \
+            | tee -a "$GITHUB_STEP_SUMMARY"

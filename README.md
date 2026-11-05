@@ -17,6 +17,11 @@ python3 sample/generate_sample.py 500           # optional: fake CSV -> sample/v
 To send real email, change the `SMTP_*` and `MAIL_FROM` variables in `docker-compose.yml`
 (e.g. `SMTP_HOST=smtp.office365.com`, `SMTP_PORT=587`, `SMTP_USE_TLS=true`, plus user/password).
 
+### On Azure
+See [infra/README.md](infra/README.md): Bicep for Container Apps, PostgreSQL Flexible Server,
+Key Vault, Container Registry, Communication Services Email and Entra ID sign-in, plus GitHub
+Actions workflows that provision it and deploy every push to `main`.
+
 ### Without Docker
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt

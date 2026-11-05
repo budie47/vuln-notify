@@ -3,7 +3,7 @@ import os
 from datetime import date, datetime, timedelta
 
 from flask import Flask, Response, abort, flash, redirect, render_template, request, url_for
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 
 from . import importer, mailer
@@ -14,6 +14,11 @@ from .models import (
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret")
+if os.environ.get("TRUST_PROXY", "").lower() in ("1", "true"):
+    # Behind a reverse proxy (Azure Container Apps ingress): trust its X-Forwarded-* headers so the
+    # app sees the real scheme (https) and host.
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200 MB uploads
 
 SEVERITIES = ["critical", "high", "medium", "low"]
@@ -60,7 +65,20 @@ def not_seen_cond():
 @app.context_processor
 def inject_globals():
     draft = SessionLocal.scalar(select(ImportRun).where(ImportRun.status == "draft"))
-    return {"draft_run": draft, "not_seen_days": NOT_SEEN_DAYS}
+    # Set by Azure Container Apps authentication (Entra ID) when sign-in is enabled.
+    user = request.headers.get("X-MS-CLIENT-PRINCIPAL-NAME")
+    return {"draft_run": draft, "not_seen_days": NOT_SEEN_DAYS, "current_user": user}
+
+
+@app.route("/healthz")
+def healthz():
+    """Liveness/readiness probe: the app is up and can reach the database."""
+    try:
+        SessionLocal.execute(text("SELECT 1"))
+        return {"status": "ok"}
+    except Exception as e:  # noqa: BLE001
+        SessionLocal.rollback()
+        return {"status": "error", "error": str(e)}, 503
 
 
 def severity_summary(where=None):
