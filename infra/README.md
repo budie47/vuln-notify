@@ -38,24 +38,13 @@ done
 ### 2. Identity for GitHub Actions (OIDC, no stored Azure password)
 
 ```bash
-SUB=$(az account show --query id -o tsv); TENANT=$(az account show --query tenantId -o tsv)
-CI_APP=$(az ad app create --display-name vuln-notify-github --query appId -o tsv)
-CI_SP=$(az ad sp create --id $CI_APP --query id -o tsv)
-
-az ad app federated-credential create --id $CI_APP --parameters '{
-  "name": "github-production",
-  "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:budie47/vuln-notify:environment:production",
-  "audiences": ["api://AzureADTokenExchange"]
-}'
-
-RG_ID=$(az group show -n rg-vuln-notify --query id -o tsv)
-# Contributor to create resources; RBAC Administrator because the template assigns roles
-# (registry pull, Key Vault read) to the app's managed identity.
-az role assignment create --assignee-object-id $CI_SP --assignee-principal-type ServicePrincipal --role Contributor --scope $RG_ID
-az role assignment create --assignee-object-id $CI_SP --assignee-principal-type ServicePrincipal --role "Role Based Access Control Administrator" --scope $RG_ID
-echo "AZURE_CLIENT_ID=$CI_APP AZURE_TENANT_ID=$TENANT AZURE_SUBSCRIPTION_ID=$SUB"
+bash infra/setup-github-identity.sh rg-vuln-notify budie47/vuln-notify
 ```
+
+Creates the `vuln-notify-github` app registration with a federated credential for this repository's
+`production` environment, and gives it **Contributor** and **Role Based Access Control Administrator**
+on the resource group (the template assigns roles to the app's managed identity). It prints
+`AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` for step 4.
 
 ### 3. App registration for sign-in (recommended)
 
@@ -92,9 +81,9 @@ Create an environment named **production** (Settings → Environments; add requi
 want an approval before each deployment), then set:
 
 ```bash
-gh secret set AZURE_CLIENT_ID     --env production --body "$CI_APP"
-gh secret set AZURE_TENANT_ID     --env production --body "$TENANT"
-gh secret set AZURE_SUBSCRIPTION_ID --env production --body "$SUB"
+gh secret set AZURE_CLIENT_ID     --env production --body "<AZURE_CLIENT_ID from step 2>"
+gh secret set AZURE_TENANT_ID     --env production --body "<AZURE_TENANT_ID from step 2>"
+gh secret set AZURE_SUBSCRIPTION_ID --env production --body "<AZURE_SUBSCRIPTION_ID from step 2>"
 gh secret set PG_ADMIN_PASSWORD   --env production --body "<long random password>"
 gh secret set FLASK_SECRET_KEY    --env production --body "$(openssl rand -hex 32)"   # keep it: encrypts saved SMTP password
 gh secret set AUTH_CLIENT_SECRET  --env production --body "$AUTH_SECRET"
